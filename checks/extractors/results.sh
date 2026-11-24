@@ -7,10 +7,11 @@ R=${1:-}
 [ -n "$R" ] && [ -s "$R" ] || { echo "inactive no report at '${R}'"; exit 0; }
 tr '\n' ' ' < "$R" | sed 's#<testcase #\n<testcase #g' | awk '
   /^<testcase / {
-    name = $0; sub(/.* name="/, "", name); sub(/".*/, "", name)
-    cls = $0; if (cls ~ / classname="/) { sub(/.* classname="/, "", cls); sub(/".*/, "", cls) } else cls = ""
-    t = $0; if (t ~ / time="/) { sub(/.* time="/, "", t); sub(/".*/, "", t) } else t = 0
-    body = $0; sub(/<\/testcase>.*/, "", body)
+    tag = $0; sub(/>.*/, "", tag)
+    name = tag; sub(/.* name="/, "", name); sub(/".*/, "", name)
+    cls = tag; if (cls ~ / classname="/) { sub(/.* classname="/, "", cls); sub(/".*/, "", cls) } else cls = ""
+    t = tag; if (t ~ / time="/) { sub(/.* time="/, "", t); sub(/".*/, "", t) } else t = 0
+    body = $0; sub(/<\/testcase>.*/, "", body); if (tag ~ /\/$/) body = tag
     st = "passed"
     if (body ~ /<skipped/) st = "skipped"
     if (body ~ /<failure/) st = "failed"
