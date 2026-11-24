@@ -479,3 +479,11 @@ F-121 | review | blocking | REQ-011 | accepted A-047 | evidence: round 3 — no 
 ```
 
 review: delta, round 4, 15 findings
+
+### 2026-11-24 (stage cut)
+
+```vid-prd-answers
+A-048 | human | 2026-11-24 | Q: how should the product be delivered — in which stages? | A: one stage, the whole product at once, with no technical stage 0 | settles: contract
+```
+
+review: delta, round 1, 0 findings
