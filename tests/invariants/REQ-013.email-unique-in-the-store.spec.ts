@@ -1,5 +1,5 @@
 // Purpose: ledger tests for ROW-171 and ROW-172 (REQ-013) — two accounts never share an email, even when created at the same moment or differing only in letter case or surrounding spaces, the store itself enforcing it; two different emails created at the same moment are both stored.
-// Provenance: hand-authored (test-author pass, slice 0, batch test-author-11); fixture data made through the product's public routes by harness.ts (reset, POST /api/admin/accounts, the email change), fresh per run; simultaneous acts through readings.ts's together().
+// Provenance: hand-authored (test-author pass, slice 0, batch test-author-11; ROW-171 case (d) repaired in slice 1, batch test-author-2); fixture data made through the product's public routes by harness.ts (reset, POST /api/admin/accounts, the email change), fresh per run; simultaneous acts through readings.ts's together().
 //
 // Boundary (R6): a store rule under concurrency, proved at the HTTP harness: POST /api/admin/accounts
 // {name,email,password,allowance} and POST /api/admin/accounts/:id/email {email} (D-029) fired in the same tick, then
@@ -28,9 +28,10 @@ function ok(status: number): boolean {
   return status >= 200 && status < 300;
 }
 
-async function create(admin: Actor, email: string): Promise<{ status: number; id?: AccountId }> {
+async function create(admin: Actor, email: string): Promise<{ status: number; id?: AccountId; name: string }> {
+  const name = freshName('Same');
   const res = await admin.api.post('/api/admin/accounts', {
-    data: { name: freshName('Same'), email, password: freshPassword(), allowance: 25 },
+    data: { name, email, password: freshPassword(), allowance: 25 },
   });
   let id: AccountId | undefined;
   try {
@@ -38,18 +39,28 @@ async function create(admin: Actor, email: string): Promise<{ status: number; id
   } catch {
     id = undefined;
   }
-  return { status: res.status(), id };
+  return { status: res.status(), id, name };
 }
 
 async function changeEmail(admin: Actor, id: AccountId, email: string): Promise<number> {
   return (await admin.api.post(`/api/admin/accounts/${encodeURIComponent(String(id))}/email`, { data: { email } })).status();
 }
 
-/** How many accounts on the people list carry this email, compared without letter case or surrounding spaces. */
-async function accountsWith(admin: Actor, email: string, row: string): Promise<number> {
+/** The account records on the people list that carry this email, compared without letter case or surrounding spaces. */
+async function holdersOf(admin: Actor, email: string, row: string): Promise<Record<string, unknown>[]> {
   const norm = email.trim().toLowerCase();
   const people = await getJson(admin.api, '/api/admin/people', row);
-  return objectsIn(people).filter((o) => Object.values(o).some((v) => typeof v === 'string' && v.trim().toLowerCase() === norm)).length;
+  return objectsIn(people).filter((o) => Object.values(o).some((v) => typeof v === 'string' && v.trim().toLowerCase() === norm));
+}
+
+/** How many accounts on the people list carry this email, compared without letter case or surrounding spaces. */
+async function accountsWith(admin: Actor, email: string, row: string): Promise<number> {
+  return (await holdersOf(admin, email, row)).length;
+}
+
+/** The display names a set of account records carry (each account's name is fresh, so it identifies the account). */
+function namesOf(records: Record<string, unknown>[], candidates: string[]): string[] {
+  return records.map((r) => candidates.find((n) => Object.values(r).includes(n)) ?? '(an unknown account)');
 }
 
 function variant(email: string): string {
@@ -72,7 +83,11 @@ function variant(email: string): string {
 // ROW-171   (e) an email change to the variant of another account's email. then: in (a), (b) and (d) exactly one act
 // ROW-171   per round answers success; (c) (the variant, and the upper case alone) and (e) are refused, while the
 // ROW-171   variant form of a fresh email is accepted (so a refusal is the rule, not the format); for every email
-// ROW-171   used, exactly one account on the people list carries it.
+// ROW-171   used, exactly one account on the people list carries it. In (d) either act may win (both are legal):
+// ROW-171   right after each round the fresh email has exactly one holder, and it is the winner (the new account
+// ROW-171   when the create won, the changed account when the change won); when the create won the changed
+// ROW-171   account still holds its own email alone; when the change won its old email has at most one holder.
+// ROW-171   The old email is never counted against a winning change (repair: it was, failing a right product).
 // ROW-171 controls: ROW-172's target (two different emails created at the same moment are both stored) — the
 // ROW-171   creates do run together and both land when they may.
 // ROW-171 technique: races repeated over rounds, across two routes; the variant (case and spaces) as the near miss
@@ -111,11 +126,29 @@ test('ROW-171.REQ-013.no-two-accounts-share-an-email-even-at-the-same-moment', a
 
   for (let i = 0; i < 3; i += 1) {
     const other = await createMember(admin, { choosePassword: false });
-    used.push(other.email);
     const e = freshEmail('cross');
     used.push(e);
-    const [x, y] = await together([async () => (await create(admin, e)).status, () => changeEmail(admin, other.id, variant(e))]);
-    expect.soft([x, y].filter(ok).length, `ROW-171 (d) round ${i}: one of a create and an email change to ${e} lands (answers ${x}, ${y})`).toBe(1);
+    const [made, change] = await together([
+      () => create(admin, e),
+      async () => ({ status: await changeEmail(admin, other.id, variant(e)), name: other.name }),
+    ]);
+    const changed = change.status;
+    const createWon = ok(made.status) && !ok(changed);
+    const changeWon = ok(changed) && !ok(made.status);
+    expect.soft([made.status, changed].filter(ok).length, `ROW-171 (d) round ${i}: one of a create and an email change to ${e} lands (answers ${made.status}, ${changed})`).toBe(1);
+
+    // The fresh email: exactly one holder, and it is the act that won.
+    const holders = await holdersOf(admin, e, 'ROW-171');
+    const winner = createWon ? made.name : changeWon ? other.name : '(no single winner)';
+    expect.soft(namesOf(holders, [made.name, other.name]), `ROW-171 (d) round ${i}: ${e} is held by the winner alone (${winner})`).toEqual([winner]);
+
+    // The changed account's own email: kept alone when the create won; never shared when the change won.
+    if (changeWon) {
+      expect.soft(await accountsWith(admin, other.email, 'ROW-171'), `ROW-171 (d) round ${i}: after the change won, ${other.email} has at most one holder`).toBeLessThanOrEqual(1);
+    } else {
+      const oldHolders = await holdersOf(admin, other.email, 'ROW-171');
+      expect.soft(namesOf(oldHolders, [made.name, other.name]), `ROW-171 (d) round ${i}: the change did not win, so ${other.email} is still held by its account alone`).toEqual([other.name]);
+    }
   }
 
   const a = await createMember(admin, { choosePassword: false });
