@@ -2,9 +2,9 @@
 // a request for themselves, cancels their own pending one, lists their own, and reads their days left. Every send runs
 // its checks and its insert in one immediate write transaction (D-005), so two sends at the same moment cannot both
 // pass a check the other would fail (REQ-002 arm 5, ROW-161). Today is the team clock's (RULE-005, D-007).
-import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
 import { db, inWriteTransaction, schema } from '~~/server/db'
-import { allowanceFor, nowIso, todayInTeamZone, type Actor } from '~~/server/domain/accounts'
+import { allowanceFor, listPeople, nowIso, teamTimeZone, todayInTeamZone, type Actor } from '~~/server/domain/accounts'
 import { countWeekdays, strictDay, weekdaysIn } from './days'
 
 const { requests } = schema
@@ -248,7 +248,7 @@ export function cancelOwnForViewer(viewer: Actor, idParam: string | undefined): 
 // The person's own list (RULE-002: a person sees the kind of their own requests only)
 // ---------------------------------------------------------------------------------------------------
 
-/** One request as its own person sees it. */
+/** One request as its own person sees it (REQ-006). */
 export interface OwnRequest {
   id: number
   kind: string
@@ -260,17 +260,27 @@ export interface OwnRequest {
   /** D-020: when the request was cancelled, and the account that cancelled it. */
   cancelledAt: string | null
   cancelledById: number | null
+  /** REQ-006 arm 7: who cancelled it, by their display name as it is now. */
+  cancelledBy: string | null
 }
 
-/** REQ-006 data: the signed-in person's own requests, in the order of their first day. */
-export function ownRequestsForViewer(viewer: Actor): { requests: OwnRequest[] } {
+/**
+ * REQ-006 data (RULE-002: the signed-in person's own requests only, never another's): every request they sent, newest
+ * first — the most recently sent at the top (ROW-244), the id breaking a tie of one instant — each with its kind, days,
+ * counted days and state, and for a cancelled one who cancelled it and when. `timeZone` is the team's (D-007), so the
+ * page shows each "when" in the team's time, never the browser's.
+ */
+export function ownRequestsForViewer(viewer: Actor): { timeZone: string; requests: OwnRequest[] } {
   const rows = db()
     .select()
     .from(requests)
     .where(eq(requests.accountId, viewer.id))
-    .orderBy(asc(requests.firstDay), asc(requests.id))
+    .orderBy(desc(requests.sentAt), desc(requests.id))
     .all()
+  const names = new Map(listPeople().map((p) => [p.id, p.name]))
+  const nameOf = (id: number | null): string | null => (id === null ? null : (names.get(id) ?? null))
   return {
+    timeZone: teamTimeZone(),
     requests: rows.map((r) => ({
       id: r.id,
       kind: r.kind,
@@ -281,6 +291,7 @@ export function ownRequestsForViewer(viewer: Actor): { requests: OwnRequest[] } 
       sentAt: r.sentAt,
       cancelledAt: r.cancelledAt,
       cancelledById: r.cancelledBy,
+      cancelledBy: nameOf(r.cancelledBy),
     })),
   }
 }
