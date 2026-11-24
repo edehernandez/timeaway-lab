@@ -1,5 +1,5 @@
 // Purpose: shared page readers for the browser journey tests (ROW-120, ROW-121) — a request or account item found by what it says, its text without its controls, a year's days-left figures, a month calendar's names per day, the confirmation step of the admin's four confirmed actions, and the contracted API reads a journey checks its effects against.
-// Provenance: hand-authored (test-author pass, slice 0, journeys batch test-author-9); reaches the product only through harness.ts, the engine door's pages and the routes of D-029; reads no application code; asserts nothing about any row.
+// Provenance: hand-authored (test-author pass, slice 0, journeys batch test-author-9; slice 1 batch test-author-7 repaired the plain text to read a space between element texts); reaches the product only through harness.ts, the engine door's pages and the routes of D-029; reads no application code; asserts nothing about any row.
 //
 // No design pack names the pages' elements (the journeys' briefs carry no design state), so these readers find
 // things by what the page says, never by a class or a test id the product would have to invent:
@@ -75,9 +75,15 @@ export async function readItems(page: Page, match: ItemMatch): Promise<ItemRead[
   return page.locator(ITEM_SELECTOR).evaluateAll(
     (els, m) => {
       const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+      // An element's texts are read with a space at every element boundary, so two cells ("1" | "Approved") read
+      // "1 Approved", never "1Approved", and a word-bounded state pattern can match (and be absent) at a cell edge.
       const plainOf = (el: Element) => {
         const copy = el.cloneNode(true) as Element;
         copy.querySelectorAll('button, a, input, select, textarea, [role="button"], [role="link"]').forEach((c) => c.remove());
+        copy.querySelectorAll('*').forEach((c) => {
+          c.before(' ');
+          c.after(' ');
+        });
         return norm(copy.textContent || '');
       };
       const ok = (el: Element) => {
