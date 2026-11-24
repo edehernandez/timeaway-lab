@@ -54,7 +54,9 @@ from the container's zone, at instants where the two dates differ.
 Parsed by checks/conformance.sh at every commit. Extensions space- or
 newline-separated. Forbidden terms one per line: dependency/import names that
 must never appear in staged source additions — pick tokens that will not
-legitimately occur in code or config otherwise.
+legitimately occur in code or config otherwise. Prisma, mysql2 and Knex are matched as a
+quoted package.json dependency or a code import only, since the lockfile lists them as optional
+companions of Drizzle that are never installed (D-029).
 
 ```vid-allowed-extensions
 .md .yml .yaml .sh .ts .vue .js .mjs .cjs .json .css .svg .ico .png .sql .txt .html .gitignore .gitattributes .nvmrc .npmrc .dockerignore
@@ -66,12 +68,17 @@ next/router
 next/link
 @angular
 sveltekit
-prisma
+"prisma"
+"@prisma/
+from 'prisma'
+from '@prisma/
 typeorm
 sequelize
 mongoose
-mysql2
-knex
+"mysql2"
+from 'mysql2'
+"knex"
+from 'knex'
 jsonwebtoken
 nodemailer
 tailwindcss
