@@ -1,0 +1,11 @@
+# The labelled detector fixture: weak <class> <subject> <rule> | good <class> <subject>
+weak strength tests/invariants/strength.spec.ts:2 existence
+good strength tests/invariants/strength.spec.ts:ROW-002
+good strength tests/invariants/strength.spec.ts:ROW-003
+weak strength tests/invariants/strength.spec.ts unbound-row
+weak vacuity tests/invariants/vacuity.spec.ts:3 status-span
+weak vacuity tests/invariants/vacuity.spec.ts:5 presence-only
+weak vacuity tests/invariants/vacuity.spec.ts:9 or-constant
+good vacuity tests/invariants/vacuity.spec.ts:12
+good vacuity tests/invariants/vacuity.spec.ts:15
+weak vacuity tests/invariants/strength.spec.ts:2 presence-only
