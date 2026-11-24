@@ -5,6 +5,8 @@
   --line: #d0d4d9;
   --accent: #1a5fb4;
   --danger: #a51d2d;
+  --paper: #ffffff;
+  --shade: rgb(0 0 0 / 0.35);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--ink);
 }

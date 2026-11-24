@@ -8,9 +8,15 @@ const firstDay = ref('')
 const lastDay = ref('')
 const problem = ref('')
 const busy = ref(false)
+// ROW-209, ROW-207: the own page says the request was sent, once, and only after the server recorded it.
+const sentNotice = useState<string>('sent-notice', () => '')
+const sent = ref('')
 
 async function submit() {
+  // ROW-208: a second press while the first is on its way sends nothing.
+  if (busy.value) return
   problem.value = ''
+  sent.value = ''
   if (kind.value === '') {
     problem.value = 'Choose vacation or sick.'
     return
@@ -21,6 +27,9 @@ async function submit() {
       method: 'POST',
       body: { kind: kind.value, firstDay: firstDay.value, lastDay: lastDay.value },
     })
+    // Said here at once, and again on the own page it leads to, only once the server answered that it recorded it.
+    sent.value = `Your ${kind.value} request for ${shownRange(firstDay.value, lastDay.value)} was sent; it is pending until the admin decides it.`
+    sentNotice.value = sent.value
     await navigateTo('/')
   } catch (e) {
     problem.value = refusalMessage(e, 'The request was not sent. Try again.')
@@ -49,6 +58,7 @@ async function submit() {
       </p>
       <p class="muted">Only Monday to Friday days count.</p>
       <p v-if="problem" class="problem" role="alert">{{ problem }}</p>
+      <p v-if="sent" role="status">{{ sent }}</p>
       <p><button type="submit" :disabled="busy">Send</button></p>
     </form>
   </section>

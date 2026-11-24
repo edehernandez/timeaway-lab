@@ -18,6 +18,8 @@ export {
   setAllowance,
   setPassword,
   switchAccount,
+  switchOffIn,
+  switchOffTarget,
   teamTimeZone,
   teamYear,
   todayInTeamZone,
