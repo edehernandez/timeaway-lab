@@ -6,9 +6,22 @@ requests, sets each person's yearly vacation allowance and runs the accounts.
 Each person sees their own requests and days left; everyone sees a month
 calendar of who is away, never why. No email, no sign-up.
 
-The spec is PRD.md; the stack is in BASELINE.md. How to run it, how to test it
-(`sh checks/test.sh`) and the preview command arrive with the code skeleton —
-there is no code yet.
+The spec is PRD.md; the stack is in BASELINE.md.
+
+## Preview
+
+Bring up the product exactly as the ledger tests it:
+
+    docker compose -f docker-compose.test.yml up --build product
+
+then find its address with `docker compose -f docker-compose.test.yml port product 3000` and open it.
+The preview runs with the test-only control routes on, as the ledger does; it is not a production setup.
+
+## Test
+
+    sh checks/test.sh
+
+The ledger runs only inside Docker (BASELINE.md).
 
 ## Before you put this online
 

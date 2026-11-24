@@ -1,0 +1,6 @@
+{
+  "name": "timeaway-tests",
+  "private": true,
+  "packageManager": "pnpm@12.18.0",
+  "dependencies": { "@playwright/test": "1.65.0" }
+}

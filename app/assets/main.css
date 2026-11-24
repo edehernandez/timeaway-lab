@@ -1,0 +1,12 @@
+/* Purpose: the one small stylesheet of D-010 — plain CSS, the system font, readable tables and forms. */
+:root {
+  --ink: #1d1d1f;
+  --muted: #5f6368;
+  --line: #d0d4d9;
+  --accent: #1a5fb4;
+  --danger: #a51d2d;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--ink);
+}
+body { margin: 0; }
+main { max-width: 60rem; margin: 0 auto; padding: 1rem; }
