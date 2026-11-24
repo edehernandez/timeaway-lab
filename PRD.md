@@ -487,3 +487,15 @@ A-048 | human | 2026-11-24 | Q: how should the product be delivered — in which
 ```
 
 review: delta, round 1, 0 findings
+
+### 2026-11-24 (sign-in limit ruling)
+
+```vid-prd-answers
+A-049 | human | 2026-11-24 | Q: must the 5-wrong-attempt limit at sign-in and at the change-password form also hold against wrong attempts sent all at the same moment, not only one after another? | A: no limit is needed for attempts sent at the same moment; it is not necessary at this stage — the limit covers attempts sent one after another | settles: REQ-014 | unchanged: REQ-014, REQ-015
+```
+
+```vid-prd-findings
+F-130 | review | advisory | A-049, REQ-014 | repaired | evidence: round 1 — A-049 settled REQ-014 without amending it or listing it unchanged; the bound lives in D-026, D-033 and ROW-237/238, not in REQ-014's arms; repaired: unchanged: REQ-014, REQ-015 added (the A-034 pattern)
+```
+
+review: delta, round 2, 1 findings
