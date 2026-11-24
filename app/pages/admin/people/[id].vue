@@ -100,7 +100,13 @@ function saveAllowance() {
 
     <h2>Password</h2>
     <p v-if="own">You change your own password on the <NuxtLink to="/password">password page</NuxtLink>, giving your current one.</p>
+    <!-- ROW-234 (REQ-015): the form names the person it is for as its username, so a password manager ties the
+         password typed here to this person, never to the admin's own saved sign-in. -->
     <form v-else autocomplete="off" @submit.prevent="setPassword">
+      <p>
+        <label for="person-password-account">Account</label>
+        <input id="person-password-account" :value="person.email" type="email" name="username" autocomplete="username" readonly>
+      </p>
       <p>
         <label for="person-password">New password for {{ person.name }}</label>
         <input id="person-password" v-model="password" type="password" autocomplete="new-password" minlength="8" required>
