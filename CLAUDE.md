@@ -38,6 +38,7 @@ spawn.)
 - Schema and migrations go in `server/db/`; nothing else opens the database.
 - One-time machine commands (the admin setup) go in `server/scripts/`.
 - Static files go in `public/`. Tests go in `tests/`.
+- The two root configuration files the stack requires are `nuxt.config.ts` and `drizzle.config.ts` (owner ruling, 2026-11-24).
 
 New files must land under one of these prefixes (machine-read by
 checks/placement.sh; a line may be an exact filename). Root doc/config files,
@@ -47,6 +48,8 @@ checks/, and tests/ are always allowed:
 app/
 server/
 public/
+nuxt.config.ts
+drizzle.config.ts
 ```
 
 ## Two-channel question rule (the core asymmetry of ViD)
