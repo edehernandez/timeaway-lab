@@ -364,9 +364,48 @@ export function setAllowance(by: Actor, id: number, body: unknown): void {
   }, 'The allowance could not be set.')
 }
 
-/** Switching accounts on and off (REQ-016 and the switch-off effects) is built by a later step; until then it is refused. */
-export function switchAccount(_by: Actor, _id: number, _body: unknown): never {
-  refuse(501, 'Switching accounts on and off is not built yet.')
+/** The account a switch-off would act on: refused for no such account, the admin's own account, or one already off (REQ-016 arm 1). */
+export function switchOffTarget(id: number): { id: number; name: string } {
+  const target = db().select().from(accounts).where(eq(accounts.id, id)).get()
+  return checkedSwitchOffTarget(target)
+}
+
+function checkedSwitchOffTarget(target: AccountRow | undefined): { id: number; name: string } {
+  if (!target) refuse(404, 'There is no such account.')
+  if (target.isAdmin === 1) refuse(409, "The admin's own account cannot be switched off.")
+  if (target.switchedOn !== 1) refuse(409, `${target.name}'s account is already switched off.`)
+  return { id: target.id, name: target.name }
+}
+
+/**
+ * REQ-016: switches an account off inside the caller's write transaction (the requests module's switch-off, which
+ * cancels the account's requests in the same transaction): sign-in stops and every session it holds ends at once
+ * (REQ-014, A-008). Refused for the admin's own account and for one already off.
+ */
+export function switchOffIn(tx: Tx, by: Actor, id: number): void {
+  const target = checkedSwitchOffTarget(accountById(tx, id))
+  tx.update(accounts).set({ switchedOn: 0 }).where(eq(accounts.id, target.id)).run()
+  tx.delete(sessions).where(eq(sessions.accountId, target.id)).run()
+  record(tx, target.id, by.id, 'switched off')
+}
+
+/**
+ * REQ-016 arms 5 and 6, REQ-013 arm 3, REQ-024: the admin switches an account back on {on: true}; it signs in again
+ * with its old password and gets back no cancelled request or day. Refused when 30 accounts are already on, or when a
+ * switched-on account holds its name. Switching off is the requests module's (it cancels the account's requests).
+ */
+export function switchAccount(by: Actor, id: number, body: unknown): { ok: true } {
+  if (fieldsOf(body).on !== true) refuse(400, 'Say on: true to switch an account on; switching off is confirmed first.')
+  write((tx) => {
+    const target = accountById(tx, id)
+    if (!target) refuse(404, 'There is no such account.')
+    if (target.switchedOn === 1) refuse(409, `${target.name}'s account is already switched on.`)
+    if (switchedOnCount(tx) >= MAX_SWITCHED_ON) refuse(409, `${MAX_SWITCHED_ON} accounts are already switched on; switch one off first.`)
+    if (switchedOnNameHolder(tx, target.nameKey, id)) refuse(409, 'A switched-on account already has this name. Rename one of them first.')
+    tx.update(accounts).set({ switchedOn: 1 }).where(eq(accounts.id, id)).run()
+    record(tx, id, by.id, 'switched on')
+  }, 'A switched-on account already has this name.')
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------------------------------------------

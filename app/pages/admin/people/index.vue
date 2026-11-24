@@ -1,5 +1,6 @@
 <!-- Purpose: the admin's people page, /admin/people (D-029, REQ-013, REQ-020): every account with its email, state and
-     allowance, and the form that creates an account (name, email, first password typed twice, allowance). Password
+     allowance, Switch off (through its confirmation, REQ-016, REQ-025) and Switch on on each ordinary account, and the
+     form that creates an account (name, email, first password typed twice, allowance). Password
      fields here are for other people: marked new-password and empty, never filled with the admin's own sign-in
      (ROW-234). -->
 <script setup lang="ts">
@@ -22,7 +23,82 @@ const again = ref('')
 const allowance = ref<number | null>(25)
 const problem = ref('')
 const done = ref('')
+const listProblem = ref('')
+const listDone = ref('')
 const busy = ref(false)
+
+interface SwitchOffStep {
+  person: Person
+  summary: string
+  token: string
+  problem: string
+}
+const switching = ref<SwitchOffStep | null>(null)
+const switchBusy = ref(false)
+
+function statusOf(e: unknown): number | undefined {
+  const x = e as { statusCode?: number; status?: number; response?: { status?: number } }
+  return x.statusCode ?? x.status ?? x.response?.status
+}
+
+async function switchOffEffect(p: Person): Promise<{ summary: string; token: string }> {
+  return $fetch<{ summary: string; token: string }>(`/api/admin/accounts/${p.id}/effect`, { query: { action: 'switch-off' } })
+}
+
+// REQ-016, REQ-025: Switch off opens the confirmation naming the requests cancelled and the days that stay.
+async function startSwitchOff(p: Person) {
+  listProblem.value = ''
+  listDone.value = ''
+  try {
+    const effect = await switchOffEffect(p)
+    switching.value = { person: p, summary: effect.summary, token: effect.token, problem: '' }
+  } catch (e) {
+    listProblem.value = refusalMessage(e, 'This account cannot be switched off now.')
+    await refresh()
+  }
+}
+
+async function confirmSwitchOff() {
+  const s = switching.value
+  if (!s || switchBusy.value) return
+  switchBusy.value = true
+  try {
+    await $fetch(`/api/admin/accounts/${s.person.id}/switch`, { method: 'POST', body: { on: false, token: s.token } })
+    listDone.value = `${s.person.name}'s account is switched off.`
+    switching.value = null
+    await refresh()
+  } catch (e) {
+    const message = refusalMessage(e, 'The account was not switched off. Nothing was changed.')
+    if (statusOf(e) === 409) {
+      // REQ-025 arm 5: what was shown no longer holds; show the confirmation again as it now is.
+      try {
+        const effect = await switchOffEffect(s.person)
+        switching.value = { person: s.person, summary: effect.summary, token: effect.token, problem: message }
+      } catch (again) {
+        switching.value = null
+        listProblem.value = refusalMessage(again, message)
+        await refresh()
+      }
+    } else {
+      s.problem = message
+    }
+  } finally {
+    switchBusy.value = false
+  }
+}
+
+// REQ-016 arm 6: switching back on restores sign-in and no cancelled request; it needs no confirmation (D-029).
+async function switchOn(p: Person) {
+  listProblem.value = ''
+  listDone.value = ''
+  try {
+    await $fetch(`/api/admin/accounts/${p.id}/switch`, { method: 'POST', body: { on: true } })
+    listDone.value = `${p.name}'s account is switched on; they sign in with their old password.`
+    await refresh()
+  } catch (e) {
+    listProblem.value = refusalMessage(e, 'The account was not switched on.')
+  }
+}
 
 async function create() {
   problem.value = ''
@@ -55,9 +131,11 @@ async function create() {
 <template>
   <section>
     <h1>People</h1>
+    <p v-if="listProblem" class="problem" role="alert">{{ listProblem }}</p>
+    <p v-if="listDone" role="status">{{ listDone }}</p>
     <table>
       <thead>
-        <tr><th>Name</th><th>Email</th><th>Allowance this year</th><th>State</th></tr>
+        <tr><th>Name</th><th>Email</th><th>Allowance this year</th><th>State</th><th><span class="visually-hidden">Actions</span></th></tr>
       </thead>
       <tbody>
         <tr v-for="p in people" :key="p.id">
@@ -65,9 +143,25 @@ async function create() {
           <td>{{ p.email }}</td>
           <td>{{ p.allowance ?? '–' }}</td>
           <td>{{ p.switchedOn ? 'Switched on' : 'Switched off' }}</td>
+          <td>
+            <template v-if="!p.isAdmin">
+              <button v-if="p.switchedOn" type="button" @click="startSwitchOff(p)">Switch off</button>
+              <button v-else type="button" @click="switchOn(p)">Switch on</button>
+            </template>
+          </td>
         </tr>
       </tbody>
     </table>
+    <ConfirmDialog
+      v-if="switching"
+      :key="`off-${switching.person.id}-${switching.token}`"
+      title="Switch this account off?"
+      :summary="switching.summary"
+      :problem="switching.problem"
+      :busy="switchBusy"
+      @confirm="confirmSwitchOff"
+      @close="switching = null"
+    />
 
     <h2>Create an account</h2>
     <form autocomplete="off" @submit.prevent="create">
@@ -105,4 +199,5 @@ form { max-width: 24rem; }
 label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
 input { width: 100%; box-sizing: border-box; padding: 0.4rem; border: 1px solid var(--line); }
 .problem { color: var(--danger); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>

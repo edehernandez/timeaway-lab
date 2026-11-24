@@ -5,11 +5,11 @@
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
 import { db, inWriteTransaction, schema } from '~~/server/db'
 import { allowanceFor, listPeople, nowIso, teamTimeZone, todayInTeamZone, type Actor } from '~~/server/domain/accounts'
-import { countWeekdays, strictDay, weekdaysIn } from './days'
+import { addDays, countWeekdays, strictDay, weekdaysIn } from './days'
 
 const { requests } = schema
-type Tx = Parameters<Parameters<typeof inWriteTransaction>[0]>[0]
-type RequestRow = typeof requests.$inferSelect
+export type Tx = Parameters<Parameters<typeof inWriteTransaction>[0]>[0]
+export type RequestRow = typeof requests.$inferSelect
 
 /** REQ-001: the two kinds of absence. */
 export const KINDS = ['vacation', 'sick'] as const
@@ -19,16 +19,16 @@ export type Kind = (typeof KINDS)[number]
 export type RequestState = 'pending' | 'approved' | 'rejected' | 'cancelled'
 
 /** Throws a refusal with `statusCode` and a plain `message` (also in data.message, where pages read it). */
-function refuse(statusCode: number, message: string): never {
+export function refuse(statusCode: number, message: string): never {
   throw createError({ statusCode, message, data: { message } })
 }
 
-function fieldsOf(body: unknown): Record<string, unknown> {
+export function fieldsOf(body: unknown): Record<string, unknown> {
   return body !== null && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {}
 }
 
 /** The request id in a route's :id, or a 404 refusal (a malformed id names no request). */
-function requestIdFrom(param: string | undefined): number {
+export function requestIdFrom(param: string | undefined): number {
   if (param === undefined || !/^[1-9][0-9]{0,15}$/.test(param)) refuse(404, 'There is no such request.')
   return Number(param)
 }
@@ -38,7 +38,7 @@ function requestIdFrom(param: string | undefined): number {
 // ---------------------------------------------------------------------------------------------------
 
 /** A request row read inside the write transaction that will change it. */
-interface Live {
+export interface Live {
   tx: Tx
   row: RequestRow
 }
@@ -47,7 +47,7 @@ interface Live {
  * RULE-004: moves a request from `from` to `to`, only if it is still in `from` (a change made meanwhile refuses it,
  * so no state is ever left by a path the table does not declare).
  */
-function transition(req: Live, from: RequestState, to: RequestState): void {
+export function transition(req: Live, from: RequestState, to: RequestState): void {
   const done = req.tx
     .update(requests)
     .set({ state: to })
@@ -60,14 +60,18 @@ function transition(req: Live, from: RequestState, to: RequestState): void {
 // Days in effect and the balance (REQ-002, REQ-003, RULE-001)
 // ---------------------------------------------------------------------------------------------------
 
-/** REQ-003: the weekdays of a request that are in effect — every counted day until a partial cancel exists. */
-function daysInEffect(row: Pick<RequestRow, 'firstDay' | 'lastDay'>): string[] {
-  return weekdaysIn(row.firstDay, row.lastDay)
+/**
+ * REQ-003, REQ-019, INV-001: the weekdays of a pending or approved request that are in effect — its counted days up to
+ * the day before its cancel day when it was partly cancelled (D-040). A rejected or cancelled request has none; the
+ * callers that count or block by days in effect read pending and approved requests only.
+ */
+export function daysInEffect(row: Pick<RequestRow, 'firstDay' | 'lastDay' | 'cancelFrom'>): string[] {
+  return weekdaysIn(row.firstDay, row.cancelFrom === null ? row.lastDay : addDays(row.cancelFrom, -1))
 }
 
 function vacationDaysOf(accountId: number, year: number, inState: RequestState): number {
   return db()
-    .select({ firstDay: requests.firstDay, lastDay: requests.lastDay })
+    .select({ firstDay: requests.firstDay, lastDay: requests.lastDay, cancelFrom: requests.cancelFrom })
     .from(requests)
     .where(
       and(
@@ -101,6 +105,16 @@ export function balanceFor(accountId: number, year: number): YearFigures {
     daysLeft: allowance - vacationDaysOf(accountId, year, 'approved'),
     pending: vacationDaysOf(accountId, year, 'pending'),
   }
+}
+
+/**
+ * RULE-001, REQ-022 (A-032): THE forecast function — the days left in `year` that approving a pending vacation of
+ * `askedDays` counted days would leave: that year's days left from balanceFor, minus those days alone (never minus the
+ * person's other pending requests, ROW-108). It may be below zero; an approval is never refused for it.
+ */
+export function forecastFor(accountId: number, year: number, askedDays: number): { daysLeft: number; forecast: number } {
+  const { daysLeft } = balanceFor(accountId, year)
+  return { daysLeft, forecast: daysLeft - askedDays }
 }
 
 /** RULE-002: the signed-in person's own figures, as GET /api/balance answers them (D-029 {years:[{year,daysLeft,pending}]}). */
@@ -248,52 +262,93 @@ export function cancelOwnForViewer(viewer: Actor, idParam: string | undefined): 
 // The person's own list (RULE-002: a person sees the kind of their own requests only)
 // ---------------------------------------------------------------------------------------------------
 
-/** One request as its own person sees it (REQ-006). */
+/**
+ * One request's record as its own person, and the admin, see it (REQ-006, REQ-017, REQ-019, REQ-021): its kind, its
+ * first and last day as sent, its counted weekdays, how many of them are in effect and how many cancelled, its state,
+ * when it was sent, who decided it and when, the rejection note, who cancelled it and when, and the day a partial
+ * cancel takes effect from (YYYY-MM-DD; null for a whole cancel, D-020). People are named by their display name as it
+ * is now, beside their account id.
+ */
 export interface OwnRequest {
   id: number
   kind: string
   firstDay: string
   lastDay: string
   countedDays: number
+  /** REQ-019, INV-001: the counted days still in effect (all of them until a cancel; none once rejected or cancelled). */
+  inEffectDays: number
+  /** REQ-019: the counted days a partial cancel took out; null for any other request (a whole cancel records no day, D-020). */
+  cancelledDays: number | null
+  accountId: number
   state: string
   sentAt: string
+  /** REQ-006 arm 3: when the admin decided it, and who. */
+  decidedAt: string | null
+  decidedBy: string | null
+  decidedById: number | null
+  /** REQ-006 arm 4: the admin's rejection note, if any. */
+  rejectionNote: string | null
   /** D-020: when the request was cancelled, and the account that cancelled it. */
   cancelledAt: string | null
-  cancelledById: number | null
   /** REQ-006 arm 7: who cancelled it, by their display name as it is now. */
   cancelledBy: string | null
+  cancelledById: number | null
+  /** REQ-019: the Monday to Friday day a partial cancel takes effect from; null when none. */
+  cancelFrom: string | null
+}
+
+/** Display names by account id, for the "who" of a record. */
+export function namesById(): (id: number | null) => string | null {
+  const names = new Map(listPeople().map((p) => [p.id, p.name]))
+  return (id) => (id === null ? null : (names.get(id) ?? null))
+}
+
+/** REQ-006, REQ-017: one stored request as its record (see OwnRequest). */
+export function recordOf(r: RequestRow, nameOf: (id: number | null) => string | null): OwnRequest {
+  const live = r.state === 'pending' || r.state === 'approved'
+  const inEffect = live ? daysInEffect(r).length : 0
+  // The counts come before accountId and decidedAt before decidedBy: a reader taking the first field named like
+  // "count" or "decided" gets the count and the decision time.
+  return {
+    id: r.id,
+    kind: r.kind,
+    firstDay: r.firstDay,
+    lastDay: r.lastDay,
+    countedDays: r.countedDays,
+    inEffectDays: inEffect,
+    cancelledDays: r.cancelFrom === null ? null : r.countedDays - inEffect,
+    accountId: r.accountId,
+    state: r.state,
+    sentAt: r.sentAt,
+    decidedAt: r.decidedAt,
+    decidedBy: nameOf(r.decidedBy),
+    decidedById: r.decidedBy,
+    rejectionNote: r.rejectionNote,
+    cancelledAt: r.cancelledAt,
+    cancelledBy: nameOf(r.cancelledBy),
+    cancelledById: r.cancelledBy,
+    cancelFrom: r.cancelFrom,
+  }
+}
+
+/** One person's requests, newest sent first — the most recently sent at the top (ROW-244), the id breaking a tie. */
+export function requestRowsOf(accountId: number): RequestRow[] {
+  return db()
+    .select()
+    .from(requests)
+    .where(eq(requests.accountId, accountId))
+    .orderBy(desc(requests.sentAt), desc(requests.id))
+    .all()
 }
 
 /**
  * REQ-006 data (RULE-002: the signed-in person's own requests only, never another's): every request they sent, newest
- * first — the most recently sent at the top (ROW-244), the id breaking a tie of one instant — each with its kind, days,
- * counted days and state, and for a cancelled one who cancelled it and when. `timeZone` is the team's (D-007), so the
- * page shows each "when" in the team's time, never the browser's.
+ * first, each as its record (see OwnRequest). `timeZone` is the team's (D-007), so the page shows each "when" in the
+ * team's time, never the browser's.
  */
 export function ownRequestsForViewer(viewer: Actor): { timeZone: string; requests: OwnRequest[] } {
-  const rows = db()
-    .select()
-    .from(requests)
-    .where(eq(requests.accountId, viewer.id))
-    .orderBy(desc(requests.sentAt), desc(requests.id))
-    .all()
-  const names = new Map(listPeople().map((p) => [p.id, p.name]))
-  const nameOf = (id: number | null): string | null => (id === null ? null : (names.get(id) ?? null))
-  return {
-    timeZone: teamTimeZone(),
-    requests: rows.map((r) => ({
-      id: r.id,
-      kind: r.kind,
-      firstDay: r.firstDay,
-      lastDay: r.lastDay,
-      countedDays: r.countedDays,
-      state: r.state,
-      sentAt: r.sentAt,
-      cancelledAt: r.cancelledAt,
-      cancelledById: r.cancelledBy,
-      cancelledBy: nameOf(r.cancelledBy),
-    })),
-  }
+  const nameOf = namesById()
+  return { timeZone: teamTimeZone(), requests: requestRowsOf(viewer.id).map((r) => recordOf(r, nameOf)) }
 }
 
 /** The test control door's reset (D-029, DIF-002): every request is wiped before the accounts it refers to. */

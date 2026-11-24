@@ -19,6 +19,30 @@ interface Change {
   to: string | null
 }
 
+interface PersonRequest {
+  id: number
+  kind: string
+  firstDay: string
+  lastDay: string
+  countedDays: number
+  inEffectDays: number
+  cancelledDays: number
+  state: string
+  decidedAt: string | null
+  decidedBy: string | null
+  rejectionNote: string | null
+  cancelledAt: string | null
+  cancelledBy: string | null
+  cancelFrom: string | null
+  canCancel: boolean
+}
+interface CancelStep {
+  request: PersonRequest
+  summary: string
+  token: string | null
+  problem: string
+}
+
 const route = useRoute()
 const me = useMe()
 const id = computed(() => String(route.params.id))
@@ -26,6 +50,64 @@ const { data: people, refresh: refreshPeople } = await useFetch<Person[]>('/api/
 const { data: history, refresh: refreshHistory } = await useFetch<{ history: Change[] }>(() => `/api/admin/people/${id.value}/history`, {
   default: () => ({ history: [] }),
 })
+// REQ-021: the person's requests as their own page lists them, each saying whether the admin's cancel applies now.
+const { data: theirs, refresh: refreshTheirs } = await useFetch<{ timeZone: string; requests: PersonRequest[] }>(
+  () => `/api/admin/people/${id.value}/requests`,
+  { default: () => ({ timeZone: 'UTC', requests: [] }) },
+)
+const cancelling = ref<CancelStep | null>(null)
+const cancelBusy = ref(false)
+
+function statusOf(e: unknown): number | undefined {
+  const x = e as { statusCode?: number; status?: number; response?: { status?: number } }
+  return x.statusCode ?? x.status ?? x.response?.status
+}
+
+async function cancelEffect(r: PersonRequest): Promise<{ summary: string; token: string }> {
+  return $fetch<{ summary: string; token: string }>(`/api/admin/requests/${r.id}/effect`, { query: { action: 'cancel' } })
+}
+
+// REQ-010, REQ-025: Cancel opens the confirmation naming the days cancelled and the days that stay; nothing changes yet.
+async function startCancel(r: PersonRequest) {
+  problem.value = ''
+  done.value = ''
+  try {
+    const effect = await cancelEffect(r)
+    cancelling.value = { request: r, summary: effect.summary, token: effect.token, problem: '' }
+  } catch (e) {
+    problem.value = refusalMessage(e, 'This request cannot be cancelled now.')
+    await refreshTheirs()
+  }
+}
+
+async function confirmCancel() {
+  const c = cancelling.value
+  if (!c || c.token === null || cancelBusy.value) return
+  cancelBusy.value = true
+  try {
+    await $fetch(`/api/admin/requests/${c.request.id}/cancel`, { method: 'POST', body: { token: c.token } })
+    done.value = `The cancelled days of ${person.value?.name ?? 'this person'}'s request are given back and off the calendar.`
+    cancelling.value = null
+    await Promise.all([refreshTheirs(), refreshHistory()])
+  } catch (e) {
+    const message = refusalMessage(e, 'The request was not cancelled. Nothing was changed.')
+    if (statusOf(e) === 409) {
+      // REQ-025 arm 5: what was shown no longer holds; show the confirmation again as it now is.
+      try {
+        const effect = await cancelEffect(c.request)
+        cancelling.value = { request: c.request, summary: effect.summary, token: effect.token, problem: message }
+      } catch (again) {
+        cancelling.value = null
+        problem.value = refusalMessage(again, message)
+        await refreshTheirs()
+      }
+    } else {
+      c.problem = message
+    }
+  } finally {
+    cancelBusy.value = false
+  }
+}
 const person = computed(() => people.value.find((p) => String(p.id) === id.value) ?? null)
 const own = computed(() => person.value !== null && me.value !== null && person.value.id === me.value.id)
 
@@ -79,6 +161,54 @@ function saveAllowance() {
     <p>Allowance this year: {{ person.allowance ?? '–' }} days</p>
     <p v-if="problem" class="problem" role="alert">{{ problem }}</p>
     <p v-if="done" role="status">{{ done }}</p>
+
+    <h2>Requests</h2>
+    <p v-if="!theirs.requests.length">{{ person.name }} has sent no requests.</p>
+    <table v-else class="requests">
+      <thead>
+        <tr>
+          <th scope="col">Kind</th>
+          <th scope="col">Days</th>
+          <th scope="col">Weekdays</th>
+          <th scope="col">State</th>
+          <th scope="col">Decided</th>
+          <th scope="col">Cancelled</th>
+          <th scope="col"><span class="visually-hidden">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="r in theirs.requests" :key="r.id">
+          <td>{{ shownWord(r.kind) }}</td>
+          <td>{{ shownRange(r.firstDay, r.lastDay) }}</td>
+          <td>
+            {{ shownCount(r.countedDays) }}<template v-if="r.cancelFrom">: {{ r.inEffectDays }} in effect, {{ r.cancelledDays }} cancelled</template>
+          </td>
+          <td>{{ shownWord(r.state) }}</td>
+          <td>
+            <template v-if="r.decidedAt">by {{ r.decidedBy ?? 'unknown' }}, {{ shownInstant(r.decidedAt, theirs.timeZone) }}</template>
+            <template v-if="r.rejectionNote"><br>Note: {{ r.rejectionNote }}</template>
+          </td>
+          <td>
+            <template v-if="r.cancelledAt">
+              <template v-if="r.cancelFrom">From {{ shownDay(r.cancelFrom) }}, </template>by {{ r.cancelledBy ?? 'unknown' }}, {{ shownInstant(r.cancelledAt, theirs.timeZone) }}
+            </template>
+          </td>
+          <td>
+            <button v-if="r.canCancel" type="button" @click="startCancel(r)">Cancel days to come</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <ConfirmDialog
+      v-if="cancelling"
+      :key="`cancel-${cancelling.request.id}-${cancelling.token}`"
+      title="Cancel the days to come?"
+      :summary="cancelling.summary"
+      :problem="cancelling.problem"
+      :busy="cancelBusy"
+      @confirm="confirmCancel"
+      @close="cancelling = null"
+    />
 
     <h2>Name</h2>
     <form @submit.prevent="rename">
@@ -146,4 +276,7 @@ label { display: block; font-weight: 600; margin-bottom: 0.25rem; }
 label.inline { display: inline; font-weight: normal; }
 input:not([type='checkbox']) { width: 100%; box-sizing: border-box; padding: 0.4rem; border: 1px solid var(--line); }
 .problem { color: var(--danger); }
+table.requests { border-collapse: collapse; width: 100%; }
+table.requests th, table.requests td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>

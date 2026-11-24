@@ -96,6 +96,12 @@ export const settings = sqliteTable('settings', {
 //     the first and both lie in one calendar year (REQ-004 arms 4 and 5).
 //   - counted_days is the number of Monday to Friday days from the first to the last day, both included, at least 1
 //     (REQ-001 arms 2 and 3); the module computes it, the store refuses a request that counts none.
+//   - decided_at and decided_by are when and by whom the admin approved or rejected it (REQ-017 arm 4); a cancel never
+//     overwrites them (arm 5). rejection_note is the admin's note, 1 to 200 characters (REQ-008 arm 5; SQLite's length
+//     counts characters, not bytes), absent when none was given.
+//   - cancel_from is the Monday to Friday day a partial cancel takes effect from (REQ-019, D-040): a real day inside the
+//     request after its first day, on an approved request only; the days in effect end the day before it. A whole
+//     cancel records no cancel day (D-020).
 export const requests = sqliteTable(
   'requests',
   {
@@ -111,6 +117,10 @@ export const requests = sqliteTable(
     sentAt: text('sent_at').notNull(),
     cancelledAt: text('cancelled_at'),
     cancelledBy: integer('cancelled_by').references(() => accounts.id),
+    decidedAt: text('decided_at'),
+    decidedBy: integer('decided_by').references(() => accounts.id),
+    rejectionNote: text('rejection_note'),
+    cancelFrom: text('cancel_from'),
   },
   (t) => [
     index('requests_account').on(t.accountId),
@@ -121,5 +131,10 @@ export const requests = sqliteTable(
       sql`date(${t.firstDay}) IS ${t.firstDay} AND date(${t.lastDay}) IS ${t.lastDay} AND length(${t.firstDay}) = 10 AND length(${t.lastDay}) = 10 AND ${t.firstDay} <= ${t.lastDay} AND substr(${t.firstDay}, 1, 4) = substr(${t.lastDay}, 1, 4)`,
     ),
     check('requests_counted', sql`${t.countedDays} >= 1`),
+    check('requests_note', sql`${t.rejectionNote} IS NULL OR (length(${t.rejectionNote}) BETWEEN 1 AND 200)`),
+    check(
+      'requests_cancel_from',
+      sql`${t.cancelFrom} IS NULL OR (date(${t.cancelFrom}) IS ${t.cancelFrom} AND length(${t.cancelFrom}) = 10 AND ${t.cancelFrom} > ${t.firstDay} AND ${t.cancelFrom} <= ${t.lastDay} AND ${t.state} = 'approved' AND strftime('%w', ${t.cancelFrom}) NOT IN ('0', '6'))`,
+    ),
   ],
 )
