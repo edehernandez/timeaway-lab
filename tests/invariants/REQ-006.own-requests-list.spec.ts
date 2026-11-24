@@ -1,17 +1,20 @@
 // Purpose: ledger tests for ROW-025, ROW-026, ROW-030 and ROW-244 (REQ-006) — the person's own requests list carries every request they sent, each with its kind, days, count and state, newest first, and no other person's request.
-// Provenance: hand-authored (test-author pass, slice 0, behavior batch 3); fixture data made through the product's public routes by harness.ts (reset, accounts, requests, decisions, cancels), fresh names per run, the team clock set by the harness.
+// Provenance: hand-authored (test-author pass, slice 0, behavior batch 3); fixture data made through the product's public routes by harness.ts (reset, accounts, requests, decisions, cancels), fresh names per run, the team clock set by the harness; ROW-244's page case added in slice 1 by batch test-author-4 (the order read on the own requests page in the browser).
 //
 // Boundary (R6): these are behaviour rows, proved at the HTTP harness — GET /api/requests, the own requests page's
 // data (D-029), read through lists.ts, whose docstring states the reading of the record (facts read by value inside
 // the record carrying the request's id; the list's order is the page's order). Team zone Pacific/Auckland; the
 // clock starts at 2027-03-01T20:00:00Z, which is Tuesday 2027-03-02 09:00 in the team zone and Monday in UTC.
-import { test, expect } from '@playwright/test';
+// ROW-244's page cases (at the end) read the order where the person reads it: on / in the browser (engine door).
+import { test, expect, type Browser } from '@playwright/test';
+import { datePatterns, findRows, type FoundRow, type RowSpec } from './page-reading';
 import {
   adminCancel,
   approve,
   cancelOwnRequest,
   createMember,
   freshName,
+  openPage,
   reject,
   setClock,
   signInMember,
@@ -280,7 +283,7 @@ test('ROW-030.REQ-006.no-other-persons-request-is-listed', async () => {
 // ROW-244   in the order two weeks out, tomorrow, next month.
 // ROW-244 controls: all three records are listed, so an order failure is not a missing record.
 // ROW-244 technique: the row's own example values; the three plausible wrong orders each differ from the right one.
-// ROW-244 cases: ROW-244 target=ROW-244.REQ-006.own-requests-listed-most-recently-sent-first control=ROW-244.control.the-three-requests-are-listed
+// ROW-244 (the row's cases: line stands with the page argument at the end of this file: the row is about the page.)
 
 async function setup244() {
   const w = await world();
@@ -311,6 +314,85 @@ test('ROW-244.REQ-006.own-requests-listed-most-recently-sent-first', async () =>
     const order = [s.twoWeeks, s.tomorrow, s.nextMonth].map(String);
     const seen = idsOf(list).filter((id) => order.includes(id));
     expect(seen, `ROW-244: listed two weeks out (${s.twoWeeks}), tomorrow (${s.tomorrow}), next month (${s.nextMonth}); list ids ${idsOf(list)}`).toEqual(order);
+  } finally {
+    await s.close();
+  }
+});
+
+// =====================================================================================================
+// ROW-244 — newest first, on the own requests page itself (added, slice 1, test-author-4)
+// =====================================================================================================
+// ROW-244 promise: REQ-006 "A person's own requests PAGE lists every request they have sent, newest first"; the
+// ROW-244   row's case: three requests sent in the order next month, then tomorrow, then two weeks out are listed
+// ROW-244   two weeks out, tomorrow, next month. The page is / (D-029's own requests page).
+// ROW-244 wrong product: GET /api/requests answers newest first but the page re-sorts on the client — by first day
+// ROW-244   (tomorrow, two weeks out, next month), by first day descending (next month, two weeks out, tomorrow) — or
+// ROW-244   draws the answer reversed (next month, tomorrow, two weeks out, oldest sent first); the API case above
+// ROW-244   stays green for every one of them.
+// ROW-244 given: setup244 — today Tue 2027-03-02 in the team zone; the member sends vacation 5..7 Apr at 09:01,
+// ROW-244   3 Mar at 09:02, 16..17 Mar at 09:03, the clock moved between sends. when: the member's browser opens /.
+// ROW-244   then: the three requests' rows, each found by its first day and bounded by the other two, stand on the
+// ROW-244   page in document order two weeks out, tomorrow, next month.
+// ROW-244 controls: ROW-244.control.the-three-requests-are-drawn-on-the-page — each of the three is drawn as one
+// ROW-244   row of its own, so an order failure is never a missing or merged row.
+// ROW-244 technique: the row's own example values, read where the person reads them (R6: paint and operation in the
+// ROW-244   browser); every plausible wrong order differs from the right one; rows found by what they say
+// ROW-244   (page-reading.ts findRows), never by markup the product would have to invent.
+// ROW-244 cases: ROW-244 target=ROW-244.REQ-006.own-requests-page-shows-most-recently-sent-first control=ROW-244.control.the-three-requests-are-drawn-on-the-page
+
+/** Opens / as the member and waits (bounded) until each of `days`' rows is drawn; answers the rows found, in `days`' order. */
+async function rowsOnOwnPage(browser: Browser, s: Awaited<ReturnType<typeof setup244>>, days: string[]): Promise<FoundRow[]> {
+  const opened = await openPage(browser, s.me);
+  try {
+    await opened.page.goto('/');
+    await opened.page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    const specs: RowSpec[] = days.map((d) => ({ key: d, keys: [datePatterns(d)] }));
+    let rows: FoundRow[] = [];
+    await expect
+      .poll(async () => (rows = await findRows(opened.page, specs)).filter((r) => r.found).length, { timeout: 15_000 })
+      .toBe(days.length)
+      .catch(() => undefined);
+    return rows;
+  } finally {
+    await opened.close();
+  }
+}
+
+const TWO_WEEKS = '2027-03-16';
+const TOMORROW = '2027-03-03';
+const NEXT_MONTH = '2027-04-05';
+
+test('ROW-244.control.the-three-requests-are-drawn-on-the-page', async ({ browser }) => {
+  const s = await setup244();
+  try {
+    const days = [NEXT_MONTH, TOMORROW, TWO_WEEKS];
+    const rows = await rowsOnOwnPage(browser, s, days);
+    for (const r of rows) {
+      expect.soft(r.found, `ROW-244 control: the request starting ${r.key} is drawn on /`).toBe(true);
+      // a row of its own: it carries no other request's first day (a one-day request draws its day twice, as first
+      // and last, so findRows' `repeated` is no reading here)
+      for (const other of days.filter((d) => d !== r.key)) {
+        expect
+          .soft(datePatterns(other).some((p) => new RegExp(p, 'i').test(r.text)), `ROW-244 control: the row of ${r.key} carries no day ${other} (text: "${r.text}")`)
+          .toBe(false);
+      }
+    }
+    expect.soft(new Set(rows.filter((r) => r.found).map((r) => r.order)).size, 'ROW-244 control: three separate rows').toBe(3);
+  } finally {
+    await s.close();
+  }
+});
+
+test('ROW-244.REQ-006.own-requests-page-shows-most-recently-sent-first', async ({ browser }) => {
+  const s = await setup244();
+  try {
+    const want = [TWO_WEEKS, TOMORROW, NEXT_MONTH];
+    const rows = await rowsOnOwnPage(browser, s, want);
+    const drawn = rows
+      .filter((r) => r.found)
+      .sort((a, b) => a.order - b.order)
+      .map((r) => r.key);
+    expect(drawn, `ROW-244: / draws two weeks out (${TWO_WEEKS}), tomorrow (${TOMORROW}), next month (${NEXT_MONTH}) in that order; drawn ${drawn.join(', ')}`).toEqual(want);
   } finally {
     await s.close();
   }
