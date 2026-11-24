@@ -88,3 +88,38 @@ export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
 })
+
+// The requests module's table (REQ-001 to REQ-005, D-036). What its values mean, held by the store:
+//   - kind is 'vacation' or 'sick' only (REQ-001 arm 1); state is one of the four states of RULE-004.
+//   - first_day and last_day are real calendar dates written exactly YYYY-MM-DD (D-007): `date(x) IS x` refuses an
+//     impossible day such as 2027-02-30, which SQLite would otherwise roll over (ROW-131); the last day is not before
+//     the first and both lie in one calendar year (REQ-004 arms 4 and 5).
+//   - counted_days is the number of Monday to Friday days from the first to the last day, both included, at least 1
+//     (REQ-001 arms 2 and 3); the module computes it, the store refuses a request that counts none.
+export const requests = sqliteTable(
+  'requests',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    accountId: integer('account_id')
+      .notNull()
+      .references(() => accounts.id),
+    kind: text('kind').notNull(),
+    firstDay: text('first_day').notNull(),
+    lastDay: text('last_day').notNull(),
+    countedDays: integer('counted_days').notNull(),
+    state: text('state').notNull(),
+    sentAt: text('sent_at').notNull(),
+    cancelledAt: text('cancelled_at'),
+    cancelledBy: integer('cancelled_by').references(() => accounts.id),
+  },
+  (t) => [
+    index('requests_account').on(t.accountId),
+    check('requests_kind', sql`${t.kind} IN ('vacation', 'sick')`),
+    check('requests_state', sql`${t.state} IN ('pending', 'approved', 'rejected', 'cancelled')`),
+    check(
+      'requests_days',
+      sql`date(${t.firstDay}) IS ${t.firstDay} AND date(${t.lastDay}) IS ${t.lastDay} AND length(${t.firstDay}) = 10 AND length(${t.lastDay}) = 10 AND ${t.firstDay} <= ${t.lastDay} AND substr(${t.firstDay}, 1, 4) = substr(${t.lastDay}, 1, 4)`,
+    ),
+    check('requests_counted', sql`${t.countedDays} >= 1`),
+  ],
+)
