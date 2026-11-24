@@ -1,13 +1,15 @@
 // Purpose: ledger tests for ROW-025, ROW-026, ROW-030 and ROW-244 (REQ-006) — the person's own requests list carries every request they sent, each with its kind, days, count and state, newest first, and no other person's request.
-// Provenance: hand-authored (test-author pass, slice 0, behavior batch 3); fixture data made through the product's public routes by harness.ts (reset, accounts, requests, decisions, cancels), fresh names per run, the team clock set by the harness; ROW-244's page case added in slice 1 by batch test-author-4 (the order read on the own requests page in the browser).
+// Provenance: hand-authored (test-author pass, slice 0, behavior batch 3); fixture data made through the product's public routes by harness.ts (reset, accounts, requests, decisions, cancels), fresh names per run, the team clock set by the harness; ROW-244's page case added in slice 1 by batch test-author-4 (the order read on the own requests page in the browser); the page cases of ROW-025, ROW-026 and ROW-030 added in slice 1 by batch test-author-5 (lesson L-1: the drawn rows read on / beside the API), through own-page.ts.
 //
 // Boundary (R6): these are behaviour rows, proved at the HTTP harness — GET /api/requests, the own requests page's
 // data (D-029), read through lists.ts, whose docstring states the reading of the record (facts read by value inside
 // the record carrying the request's id; the list's order is the page's order). Team zone Pacific/Auckland; the
 // clock starts at 2027-03-01T20:00:00Z, which is Tuesday 2027-03-02 09:00 in the team zone and Monday in UTC.
 // ROW-244's page cases (at the end) read the order where the person reads it: on / in the browser (engine door).
+// The page cases of ROW-025, ROW-026 and ROW-030 (at the end) read the drawn rows themselves on / (engine door).
 import { test, expect, type Browser } from '@playwright/test';
 import { datePatterns, findRows, type FoundRow, type RowSpec } from './page-reading';
+import { readOwnPage, rowOf, saysDay, saysKind, saysNumber, saysState, type DrawnSpec, type ShownState } from './own-page';
 import {
   adminCancel,
   approve,
@@ -58,7 +60,7 @@ const world = () => freshInstall(T0, '2027-03-02');
 // ROW-025 controls: the same setup, and the plain pending current-year vacation is listed — the list route answers
 // ROW-025   for the member and carries the sent request a dropping fault leaves alone.
 // ROW-025 technique: one request per state, kind and year (the classes a filter fault drops), each checked by its id.
-// ROW-025 cases: ROW-025 target=ROW-025.REQ-006.every-sent-request-is-listed-whatever-its-state-kind-or-year control=ROW-025.control.a-pending-vacation-is-listed
+// ROW-025 (the row's cases: line stands with the page argument at the end of this file: the row is about the page.)
 
 async function setup025() {
   const w = await world();
@@ -130,7 +132,7 @@ test('ROW-025.REQ-006.every-sent-request-is-listed-whatever-its-state-kind-or-ye
 // ROW-026 controls: the three records are listed, and the test data separates counted from calendar days.
 // ROW-026 technique: decoys — distinct counts, kinds, years and states per record, so the right values on the wrong
 // ROW-026   record fail; values read by value inside the record carrying the id (lists.ts).
-// ROW-026 cases: ROW-026 target=ROW-026.REQ-006.each-listed-request-carries-its-kind-days-count-and-state control=ROW-026.control.the-three-requests-are-listed
+// ROW-026 (the row's cases: line stands with the page argument at the end of this file: the row is about the page.)
 
 async function setup026() {
   const w = await world();
@@ -206,7 +208,7 @@ test('ROW-026.REQ-006.each-listed-request-carries-its-kind-days-count-and-state'
 // ROW-030   the target is not an empty list.
 // ROW-030 technique: isolation — the neighbouring person's records, same days as a decoy, and fresh identifying
 // ROW-030   values searched in the whole body (a leak in any field fails).
-// ROW-030 cases: ROW-030 target=ROW-030.REQ-006.no-other-persons-request-is-listed control=ROW-030.control.each-list-carries-its-own-requests
+// ROW-030 (the row's cases: line stands with the page argument at the end of this file: the row is about the page.)
 
 async function setup030() {
   const w = await world();
@@ -393,6 +395,202 @@ test('ROW-244.REQ-006.own-requests-page-shows-most-recently-sent-first', async (
       .sort((a, b) => a.order - b.order)
       .map((r) => r.key);
     expect(drawn, `ROW-244: / draws two weeks out (${TWO_WEEKS}), tomorrow (${TOMORROW}), next month (${NEXT_MONTH}) in that order; drawn ${drawn.join(', ')}`).toEqual(want);
+  } finally {
+    await s.close();
+  }
+});
+
+// =====================================================================================================
+// ROW-025, ROW-026, ROW-030 — on the own requests page itself (added, slice 1, test-author-5; lesson L-1)
+// =====================================================================================================
+// The API cases above read GET /api/requests; a page that filters, merges or relabels on the client keeps them
+// green. These cases open / in the person's browser (engine door) and read the drawn rows (own-page.ts: a row is
+// found by its first and last day, bounded by the other requests' days), beside the API reading.
+
+/** Monday 2027-03-01 09:00 in the team zone (Sunday 20:00 UTC). */
+const T_MON = '2027-02-28T20:00:00Z';
+
+// ROW-025 promise: REQ-006 "A person's own requests PAGE lists every request they have sent"; fail-if (1) "a request
+// ROW-025   the person sent is missing from the page". Authority: REQ-006 arm 1; the states a sent request reaches
+// ROW-025   (pending, approved, rejected, cancelled) from A-023 and A-030.
+// ROW-025 wrong product: GET /api/requests answers all seven, but the page draws only pending ones, or only this
+// ROW-025   year's, or only vacation, or hides cancelled and rejected ones client-side ("active requests") — the API case
+// ROW-025   above stays green for every one of them.
+// ROW-025 given: setup025Page — the member sends six requests on Monday 2027-03-01 (a pending vacation, a vacation
+// ROW-025   approved, a sick request for past days rejected, a vacation they cancel themselves, a pending next-year
+// ROW-025   vacation, a vacation the admin approves then cancels whole), all acts that Monday; on Tuesday 2027-03-02 a
+// ROW-025   sick day for that day, approved that day — so no act's date is another request's day and each row is told
+// ROW-025   by its own first and last day. when: the member's browser opens /. then: each of the seven is drawn as a row.
+// ROW-025 controls: ROW-025.control.page-draws-a-pending-vacation — the API lists all seven ids (the setup worked)
+// ROW-025   and the page draws the plain pending vacation, a row no dropping fault removes.
+// ROW-025 technique: one request per state, kind and year (the classes a client filter drops), each found on the
+// ROW-025   page by its own days; read where the person reads (R6: paint in the browser).
+// ROW-025 cases: ROW-025 target=ROW-025.REQ-006.page-draws-every-sent-request-whatever-its-state-kind-or-year control=ROW-025.control.page-draws-a-pending-vacation
+
+async function setup025Page() {
+  const w = await freshInstall(T_MON, '2027-03-01');
+  const member = await createMember(w.admin, { name: freshName('Ines') });
+  const me = await signInMember(member);
+  const sent: (DrawnSpec & { id: AccountId })[] = [];
+  const send = async (label: string, spec: RequestSpec, instant: string) => {
+    const id = await sendAt(me, spec, instant);
+    sent.push({ label, firstDay: spec.firstDay, lastDay: spec.lastDay, id });
+    return id;
+  };
+  await send('pending vacation', { kind: 'vacation', firstDay: '2027-03-22', lastDay: '2027-03-24' }, minutesAfter(T_MON, 1));
+  const approved = await send('approved vacation', { kind: 'vacation', firstDay: '2027-04-12', lastDay: '2027-04-13' }, minutesAfter(T_MON, 2));
+  const rejected = await send('rejected sick (past days)', { kind: 'sick', firstDay: '2027-02-25', lastDay: '2027-02-26' }, minutesAfter(T_MON, 3));
+  const ownCancel = await send('vacation cancelled by the member', { kind: 'vacation', firstDay: '2027-05-03', lastDay: '2027-05-04' }, minutesAfter(T_MON, 4));
+  await send('pending next-year vacation', { kind: 'vacation', firstDay: '2028-01-10', lastDay: '2028-01-12' }, minutesAfter(T_MON, 5));
+  const adminWhole = await send('vacation the admin cancelled whole', { kind: 'vacation', firstDay: '2027-06-07', lastDay: '2027-06-08' }, minutesAfter(T_MON, 6));
+  await setClock(minutesAfter(T_MON, 10));
+  await approve(w.admin, approved);
+  await reject(w.admin, rejected);
+  await cancelOwnRequest(me, ownCancel);
+  await approve(w.admin, adminWhole);
+  await setClock(minutesAfter(T_MON, 20));
+  await adminCancel(w.admin, adminWhole);
+  const sickToday = await send('approved sick today', { kind: 'sick', firstDay: '2027-03-02', lastDay: '2027-03-02' }, minutesAfter(T0, 1));
+  await setClock(minutesAfter(T0, 10));
+  await approve(w.admin, sickToday);
+  return { ...w, member, me, sent, close: async () => { await me.dispose(); await w.close(); } };
+}
+
+test('ROW-025.control.page-draws-a-pending-vacation', async ({ browser }) => {
+  const s = await setup025Page();
+  try {
+    const list = await readOwnRequests(s.me);
+    for (const r of s.sent) expect.soft(recordOf(list, r.id), `ROW-025 control: the API lists the ${r.label} (id ${r.id}); ids ${idsOf(list)}`).toBeDefined();
+    const read = await readOwnPage(browser, s.me, s.sent);
+    expect(read.status, 'ROW-025 control: / answers 200').toBe(200);
+    expect(rowOf(read, 'pending vacation').found, `ROW-025 control: / draws the pending vacation 2027-03-22..24; page: "${read.body.slice(0, 600)}"`).toBe(true);
+  } finally {
+    await s.close();
+  }
+});
+
+test('ROW-025.REQ-006.page-draws-every-sent-request-whatever-its-state-kind-or-year', async ({ browser }) => {
+  const s = await setup025Page();
+  try {
+    const read = await readOwnPage(browser, s.me, s.sent);
+    for (const r of s.sent) {
+      expect.soft(rowOf(read, r.label).found, `ROW-025: / draws the ${r.label} ${r.firstDay}..${r.lastDay} (id ${r.id}); page: "${read.body.slice(0, 600)}"`).toBe(true);
+    }
+  } finally {
+    await s.close();
+  }
+});
+
+// ROW-026 promise: REQ-006 "each with its kind, first and last day, counted days, state"; fail-if (2) "a listed
+// ROW-026   request lacks its kind, its days, its count or its state" — on the page. The count is REQ-006's "counted
+// ROW-026   days", computed here by the test (countWeekdays), never read from the product.
+// ROW-026 wrong product: the API record carries every fact, but the page draws no kind (hidden "for privacy" even
+// ROW-026   from the person), only the first day, the calendar length (9, 5, 4) instead of the counted days (7, 3, 2),
+// ROW-026   one state label for all rows, or relabels the state on the client — the API case stays green.
+// ROW-026 given: setup026 — an approved vacation Mon 2027-03-08..Tue 2027-03-16 (7 counted, 9 calendar), a rejected
+// ROW-026   sick Thu 2027-02-25..Mon 2027-03-01 (3 counted, 5 calendar), a pending vacation Fri 2028-01-14..Mon
+// ROW-026   2028-01-17 (2 counted, 4 calendar); sent and decided on 2027-03-02, no request's day. when: the member's
+// ROW-026   browser opens /. then: each request's row draws its own kind word and not the other, its first and its last
+// ROW-026   day, its counted days as a number of its own (dates, names and years removed first), its own state word,
+// ROW-026   and neither of the other two states.
+// ROW-026 controls: ROW-026.control.page-draws-the-three-requests — the three rows are drawn on / at all.
+// ROW-026 technique: decoys — distinct kinds, counts, years and states per row, so the right values on the wrong
+// ROW-026   row fail; each row bounded by the other two (own-page.ts).
+// ROW-026 cases: ROW-026 target=ROW-026.REQ-006.page-row-draws-its-kind-days-count-and-state control=ROW-026.control.page-draws-the-three-requests
+
+function specs026(s: Awaited<ReturnType<typeof setup026>>): DrawnSpec[] {
+  return s.items.map((i) => ({ label: i.label, firstDay: i.spec.firstDay, lastDay: i.spec.lastDay }));
+}
+
+test('ROW-026.control.page-draws-the-three-requests', async ({ browser }) => {
+  const s = await setup026();
+  try {
+    const read = await readOwnPage(browser, s.me, specs026(s));
+    for (const i of s.items) expect.soft(rowOf(read, i.label).found, `ROW-026 control: / draws the ${i.label}; page: "${read.body.slice(0, 600)}"`).toBe(true);
+  } finally {
+    await s.close();
+  }
+});
+
+test('ROW-026.REQ-006.page-row-draws-its-kind-days-count-and-state', async ({ browser }) => {
+  const s = await setup026();
+  try {
+    const read = await readOwnPage(browser, s.me, specs026(s));
+    const days = [...s.items.flatMap((i) => [i.spec.firstDay, i.spec.lastDay]), '2027-03-02'];
+    const literals = [s.member.name, s.member.email, s.install.admin.name, s.install.admin.email, '2027', '2028'];
+    const states: ShownState[] = ['pending', 'approved', 'rejected'];
+    for (const i of s.items) {
+      const row = rowOf(read, i.label);
+      expect.soft(row.found, `ROW-026: / draws the ${i.label}; page: "${read.body.slice(0, 600)}"`).toBe(true);
+      if (!row.found) continue;
+      const other = i.spec.kind === 'vacation' ? 'sick' : 'vacation';
+      const count = countWeekdays(i.spec.firstDay, i.spec.lastDay);
+      expect.soft(saysKind(row.text, i.spec.kind), `ROW-026: the ${i.label}'s row draws its kind "${i.spec.kind}": "${row.text}"`).toBe(true);
+      expect.soft(saysKind(row.text, other), `ROW-026: the ${i.label}'s row does not draw the other kind "${other}": "${row.text}"`).toBe(false);
+      expect.soft(saysDay(row.text, i.spec.firstDay), `ROW-026: the ${i.label}'s row draws its first day ${i.spec.firstDay}: "${row.text}"`).toBe(true);
+      expect.soft(saysDay(row.text, i.spec.lastDay), `ROW-026: the ${i.label}'s row draws its last day ${i.spec.lastDay}: "${row.text}"`).toBe(true);
+      expect.soft(saysNumber(row.text, count, days, literals), `ROW-026: the ${i.label}'s row draws its counted days ${count}: "${row.text}"`).toBe(true);
+      expect.soft(saysState(row.text, i.state), `ROW-026: the ${i.label}'s row draws its state "${i.state}": "${row.text}"`).toBe(true);
+      for (const st of states.filter((x) => x !== i.state)) {
+        expect.soft(saysState(row.text, st), `ROW-026: the ${i.label}'s row does not draw the state "${st}": "${row.text}"`).toBe(false);
+      }
+    }
+  } finally {
+    await s.close();
+  }
+});
+
+// ROW-030 promise: REQ-006 "it shows no other person's requests"; fail-if (6) "the page shows any other person's
+// ROW-030   request" — on the page.
+// ROW-030 wrong product: GET /api/requests answers only the person's own, but the page reads a team-wide source
+// ROW-030   (or merges in the calendar's approved days) and draws a colleague's request — the API case stays green.
+// ROW-030 given: setup030 — Ana sends 22..23 March (vacation) and 1 March (sick); Bo sends exactly 22..23 March,
+// ROW-030   approved, and 5 April; the admin sends 29..30 March; every send on 2027-03-02. when: Ana's browser opens /,
+// ROW-030   then Bo's. then: on Ana's page the 22..23 March row is drawn once (Bo's same-days request is not drawn
+// ROW-030   beside it) and no rendering of 5 April, 29 March or 30 March appears anywhere; on Bo's page the 22..23 March
+// ROW-030   row is drawn once and no rendering of 1 March, 29 March or 30 March appears.
+// ROW-030 controls: ROW-030.control.each-page-draws-its-own-requests — each page draws its own person's two rows, so
+// ROW-030   an absence in the target is not an empty or unloaded page.
+// ROW-030 technique: isolation — the neighbouring person's records, one with the same days as a decoy (caught as a
+// ROW-030   second place carrying those days), the others by days that only they carry, searched in the whole page.
+// ROW-030 cases: ROW-030 target=ROW-030.REQ-006.page-draws-no-other-persons-request control=ROW-030.control.each-page-draws-its-own-requests
+
+const ANA_ROWS: DrawnSpec[] = [
+  { label: 'Ana 22..23 March', firstDay: '2027-03-22', lastDay: '2027-03-23' },
+  { label: 'Ana 1 March', firstDay: '2027-03-01', lastDay: '2027-03-01' },
+];
+const BO_ROWS: DrawnSpec[] = [
+  { label: 'Bo 22..23 March', firstDay: '2027-03-22', lastDay: '2027-03-23' },
+  { label: 'Bo 5 April', firstDay: '2027-04-05', lastDay: '2027-04-05' },
+];
+
+test('ROW-030.control.each-page-draws-its-own-requests', async ({ browser }) => {
+  const s = await setup030();
+  try {
+    const ana = await readOwnPage(browser, s.anaS, ANA_ROWS);
+    for (const r of ANA_ROWS) expect.soft(rowOf(ana, r.label).found, `ROW-030 control: Ana's page draws ${r.label}; page: "${ana.body.slice(0, 600)}"`).toBe(true);
+    const bo = await readOwnPage(browser, s.boS, BO_ROWS);
+    for (const r of BO_ROWS) expect.soft(rowOf(bo, r.label).found, `ROW-030 control: Bo's page draws ${r.label}; page: "${bo.body.slice(0, 600)}"`).toBe(true);
+  } finally {
+    await s.close();
+  }
+});
+
+test('ROW-030.REQ-006.page-draws-no-other-persons-request', async ({ browser }) => {
+  const s = await setup030();
+  try {
+    const ana = await readOwnPage(browser, s.anaS, ANA_ROWS);
+    const anaRow = rowOf(ana, 'Ana 22..23 March');
+    expect.soft(anaRow.found && !anaRow.repeated, `ROW-030: Ana's page draws 22..23 March once — Bo's same-days request is not drawn; page: "${ana.body.slice(0, 600)}"`).toBe(true);
+    for (const [whose, day] of [['Bo', '2027-04-05'], ['the admin', '2027-03-29'], ['the admin', '2027-03-30']] as const) {
+      expect.soft(saysDay(ana.body, day), `ROW-030: Ana's page draws no ${day} (${whose}'s request); page: "${ana.body.slice(0, 600)}"`).toBe(false);
+    }
+    const bo = await readOwnPage(browser, s.boS, BO_ROWS);
+    const boRow = rowOf(bo, 'Bo 22..23 March');
+    expect.soft(boRow.found && !boRow.repeated, `ROW-030: Bo's page draws 22..23 March once — Ana's same-days request is not drawn; page: "${bo.body.slice(0, 600)}"`).toBe(true);
+    for (const [whose, day] of [['Ana', '2027-03-01'], ['the admin', '2027-03-29'], ['the admin', '2027-03-30']] as const) {
+      expect.soft(saysDay(bo.body, day), `ROW-030: Bo's page draws no ${day} (${whose}'s request); page: "${bo.body.slice(0, 600)}"`).toBe(false);
+    }
   } finally {
     await s.close();
   }
