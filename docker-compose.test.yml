@@ -1,0 +1,53 @@
+# Purpose: the ONLY way the ledger runs. `sh checks/test.sh` brings this up, runs tests/invariants/, and tears
+# it down. Tests physically cannot reach anything real: no real credentials in any environment.
+#
+# One product image (v0.9.2 3.6, R21): the product is ONE service, built from ONE context and ONE target
+# (Dockerfile, target product), reached by the tests only over the network at http://product:3000. The README's
+# preview command brings up this same product service alone, from this file. checks/harness.sh reads this file.
+#
+# The four harness rules (rules: 2): (1) nothing is installed at start — the product's dependencies are in its
+# image, the tests' in theirs (tests/Dockerfile); (2) the product declares a healthcheck on its readiness route
+# /api/health and the tests wait for it; the product needs no other service (SQLite is a file inside it);
+# (3) no slow-loading test service exists; (4) no case runs longer than case-limit seconds — Playwright's own
+# --timeout takes VID_CASE_LIMIT. TIMEAWAY_TEST_CONTROL with VID_TEST enables the test-only control routes
+# (the clock and the reset), DIF-001 and DIF-002; the product refuses to start with it set outside the test.
+x-vid-harness:
+  product: product
+  rules: 2
+  case-limit: 600
+  forbidden: [webServer, "@nuxt/test-utils", createPage]
+  completed: [0, 1]
+services:
+  product:
+    build:
+      context: ${VID_TEST_CONTEXT:-.}
+      target: product
+    image: timeaway-product:test
+    ports:
+      - "127.0.0.1::3000"
+    environment:
+      VID_TEST: "1"
+      TIMEAWAY_TEST_CONTROL: "1"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      retries: 60
+  tests:
+    build:
+      context: ${VID_TEST_CONTEXT:-.}
+      dockerfile: tests/Dockerfile
+    image: timeaway-tests:1.65.0
+    working_dir: /app
+    depends_on:
+      product:
+        condition: service_healthy
+    volumes:
+      - ${VID_TEST_CONTEXT:-.}:/app:ro
+      - ./.vid/ledger-results:/vid-results
+    environment:
+      VID_TEST: "1"
+      VID_PRODUCT_URL: http://product:3000
+      VID_CASE_LIMIT: ${VID_CASE_LIMIT:-600}
+      PLAYWRIGHT_JUNIT_OUTPUT_FILE: /vid-results/pending.xml
+      PLAYWRIGHT_JUNIT_OUTPUT_NAME: /vid-results/pending.xml
+    command: sh -c '/node_modules/.bin/playwright test -c tests/invariants/playwright.config.ts --reporter=line,junit --timeout=$$((VID_CASE_LIMIT*1000)) ${VID_SELECTOR:-}'
