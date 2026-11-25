@@ -19,6 +19,7 @@ import {
   type Actor,
 } from '~~/server/domain/accounts'
 import {
+  adminCancelApplies,
   balanceFor,
   daysInEffect,
   fieldsOf,
@@ -162,7 +163,7 @@ function requestPlan(action: 'approve' | 'reject' | 'cancel', row: RequestRow, n
   // REQ-010: the admin cancels an approved request, from today on only.
   if (row.state !== 'approved') refuse(409, `This request is ${row.state}; only an approved request can be cancelled here. Nothing was changed.`)
   const c = cancelEffectOf(row, today)
-  if (c.going.length === 0) {
+  if (!adminCancelApplies(row, today)) {
     refuse(409, 'This request has no Monday to Friday day from today on, so there is nothing to cancel. Nothing was changed.')
   }
   const back = row.kind === 'vacation' ? 'given back to the allowance and ' : ''
@@ -454,7 +455,7 @@ export function personRequests(accountId: number): { person: { id: number; name:
     today,
     requests: requestRowsOf(accountId).map((r) => ({
       ...recordOf(r, nameOf),
-      canCancel: r.state === 'approved' && daysInEffect(r).some((d) => d >= today),
+      canCancel: adminCancelApplies(r, today),
     })),
   }
 }

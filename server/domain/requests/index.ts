@@ -12,6 +12,7 @@ export {
   type PersonYear,
   sendForViewer,
   type Kind,
+  type OwnAction,
   type OwnRequest,
   type RequestState,
   type YearFigures,

@@ -74,6 +74,46 @@ export function daysInEffect(row: Pick<RequestRow, 'firstDay' | 'lastDay' | 'can
   return weekdaysIn(row.firstDay, row.cancelFrom === null ? row.lastDay : addDays(row.cancelFrom, -1))
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Who may cancel a request now (REQ-005, REQ-010, REQ-029): the one copy of each rule, read by the acts that apply
+// it and by the lists that say, per request, what the viewer can do — so a page never offers what the server refuses.
+// ---------------------------------------------------------------------------------------------------
+
+/** REQ-005 (A-038): a request has a Monday to Friday day before `today` among its days as sent. */
+export function hasWeekdayBefore(row: Pick<RequestRow, 'firstDay' | 'lastDay'>, today: string): boolean {
+  return weekdaysIn(row.firstDay, row.lastDay).some((d) => d < today)
+}
+
+/** REQ-005 (A-007, A-038): its sender's own cancel applies — the request is pending and has no weekday before today. */
+export function ownCancelApplies(row: Pick<RequestRow, 'state' | 'firstDay' | 'lastDay'>, today: string): boolean {
+  return row.state === 'pending' && !hasWeekdayBefore(row, today)
+}
+
+/** REQ-010, REQ-021: the admin's cancel applies — the request is approved with a Monday to Friday day in effect from today on. */
+export function adminCancelApplies(row: Pick<RequestRow, 'state' | 'firstDay' | 'lastDay' | 'cancelFrom'>, today: string): boolean {
+  return row.state === 'approved' && daysInEffect(row).some((d) => d >= today)
+}
+
+/**
+ * REQ-029: what the signed-in person can do with one of their own requests now, as their own page shows it.
+ *   'cancel'        — their own cancel (REQ-005): pending, no weekday before today;
+ *   'cancel-days'   — the admin alone, on their own approved request: the admin's cancel with its confirmation (A-061);
+ *   'admin-cancels' — anyone else's approved request with a weekday in effect from today on: only the admin cancels it;
+ *   'admin-decides' — anyone else's pending request with a weekday before today: the admin decides it (A-038);
+ *   'decide'        — the admin's own such pending request: they decide it on the pending page;
+ *   null            — nothing to do (rejected, cancelled, or approved with nothing in effect from today on).
+ */
+export type OwnAction = 'cancel' | 'cancel-days' | 'admin-cancels' | 'admin-decides' | 'decide' | null
+
+export function ownActionOf(row: RequestRow, isAdmin: boolean, today: string): OwnAction {
+  if (row.state === 'pending') {
+    if (ownCancelApplies(row, today)) return 'cancel'
+    return isAdmin ? 'decide' : 'admin-decides'
+  }
+  if (adminCancelApplies(row, today)) return isAdmin ? 'cancel-days' : 'admin-cancels'
+  return null
+}
+
 function vacationDaysOf(accountId: number, year: number, inState: RequestState): number {
   return db()
     .select({ firstDay: requests.firstDay, lastDay: requests.lastDay, cancelFrom: requests.cancelFrom })
@@ -273,8 +313,7 @@ export function cancelOwnForViewer(viewer: Actor, idParam: string | undefined): 
       .get()
     if (!row) refuse(404, 'There is no such request.')
     if (row.state !== 'pending') refuse(409, `Only a pending request can be cancelled, and this one is ${row.state}. The admin decides any change to it.`)
-    const today = todayInTeamZone()
-    if (weekdaysIn(row.firstDay, row.lastDay).some((d) => d < today)) {
+    if (!ownCancelApplies(row, todayInTeamZone())) {
       refuse(409, 'This request has a weekday before today, so you can no longer cancel it: the admin decides it.')
     }
     const live: Live = { tx, row, also: { cancelledAt: nowIso(), cancelledBy: viewer.id } }
@@ -369,11 +408,16 @@ export function requestRowsOf(accountId: number): RequestRow[] {
 /**
  * REQ-006 data (RULE-002: the signed-in person's own requests only, never another's): every request they sent, newest
  * first, each as its record (see OwnRequest). `timeZone` is the team's (D-007), so the page shows each "when" in the
- * team's time, never the browser's.
+ * team's time, never the browser's. REQ-029: each carries `action`, what the viewer can do with it now (OwnAction),
+ * decided by the same rules the cancels apply at the team clock's today, so the page never keeps a second copy.
  */
-export function ownRequestsForViewer(viewer: Actor): { timeZone: string; requests: OwnRequest[] } {
+export function ownRequestsForViewer(viewer: Actor & { isAdmin: boolean }): { timeZone: string; requests: (OwnRequest & { action: OwnAction })[] } {
   const nameOf = namesById()
-  return { timeZone: teamTimeZone(), requests: requestRowsOf(viewer.id).map((r) => recordOf(r, nameOf)) }
+  const today = todayInTeamZone()
+  return {
+    timeZone: teamTimeZone(),
+    requests: requestRowsOf(viewer.id).map((r) => ({ ...recordOf(r, nameOf), action: ownActionOf(r, viewer.isAdmin, today) })),
+  }
 }
 
 /** The test control door's reset (D-029, DIF-002): every request is wiped before the accounts it refers to. */

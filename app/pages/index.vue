@@ -1,6 +1,7 @@
 <!-- Purpose: the person's own page, / (D-029, REQ-006, REQ-007) — their vacation days left for this year and next
      with each year's pending vacation days beside it, their own requests newest first with kind, days, counted
-     weekdays, state, when it was sent and who cancelled one and when, and the cancel of a pending one (REQ-005). Days are shown from their YYYY-MM-DD text as they are, never
+     weekdays, state, when it was sent and who cancelled one and when, and what the person can do with each (REQ-029): the cancel of a pending one (REQ-005), the admin's
+     cancel of their own approved days (A-061), or who acts on it. Days are shown from their YYYY-MM-DD text as they are, never
      turned into an instant, so every browser zone shows the same day (D-007, ROW-131). -->
 <script setup lang="ts">
 interface OwnRequest {
@@ -19,6 +20,8 @@ interface OwnRequest {
   cancelledAt: string | null
   cancelledBy: string | null
   cancelFrom: string | null
+  /** REQ-029: what the signed-in person can do with it now, decided by the server's own cancel rules. */
+  action: 'cancel' | 'cancel-days' | 'admin-cancels' | 'admin-decides' | 'decide' | null
 }
 
 interface YearFigures {
@@ -51,6 +54,15 @@ function shownAt(iso: string): string {
 const figure = shownFigure
 
 const label = shownWord
+
+// REQ-029, A-061: the admin cancels the days to come of their own approved request through the same two-step cancel,
+// with the same confirmation, as on the person page (REQ-010, REQ-025).
+const { cancelling, cancelBusy, startCancel, confirmCancel, closeCancel } = useAdminCancel<OwnRequest>({
+  problem,
+  done: notice,
+  doneMessage: () => 'The cancelled days of your request are given back and off the calendar.',
+  refresh: () => Promise.all([refresh(), refreshBalance()]),
+})
 
 // REQ-005: a person cancels their own pending request; the server decides whether it still may.
 async function cancel(id: number) {
@@ -133,12 +145,27 @@ async function cancel(id: number) {
               <template v-if="r.cancelFrom">Days from {{ shown(r.cancelFrom) }} cancelled, </template>by {{ r.cancelledBy ?? 'unknown' }}, {{ shownAt(r.cancelledAt) }}
             </template>
           </td>
+          <!-- REQ-029: a cancel control only where the server's rules let this person cancel; otherwise who acts on it. -->
           <td>
-            <button v-if="r.state === 'pending'" type="button" :disabled="busy === r.id" @click="cancel(r.id)">Cancel</button>
+            <button v-if="r.action === 'cancel'" type="button" :disabled="busy === r.id" @click="cancel(r.id)">Cancel</button>
+            <button v-else-if="r.action === 'cancel-days'" type="button" @click="startCancel(r)">Cancel days to come</button>
+            <template v-else-if="r.action === 'admin-cancels'">Only the admin can cancel it.</template>
+            <template v-else-if="r.action === 'admin-decides'">It has a weekday before today, so the admin decides it.</template>
+            <template v-else-if="r.action === 'decide'"><NuxtLink to="/admin/pending">Approve or reject it</NuxtLink> on the pending page.</template>
           </td>
         </tr>
       </tbody>
     </table>
+    <ConfirmDialog
+      v-if="cancelling"
+      :key="`cancel-${cancelling.request.id}-${cancelling.token}`"
+      title="Cancel the days to come?"
+      :summary="cancelling.summary"
+      :problem="cancelling.problem"
+      :busy="cancelBusy"
+      @confirm="confirmCancel"
+      @close="closeCancel"
+    />
   </section>
 </template>
 

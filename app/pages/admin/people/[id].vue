@@ -40,13 +40,6 @@ interface PersonRequest {
   cancelFrom: string | null
   canCancel: boolean
 }
-interface CancelStep {
-  request: PersonRequest
-  summary: string
-  token: string | null
-  problem: string
-}
-
 const route = useRoute()
 const me = useMe()
 const id = computed(() => String(route.params.id))
@@ -61,59 +54,15 @@ const { data: theirs, refresh: refreshTheirs } = await useFetch<{ timeZone: stri
   () => `/api/admin/people/${id.value}/requests`,
   { default: () => ({ timeZone: 'UTC', requests: [] }) },
 )
-const cancelling = ref<CancelStep | null>(null)
-const cancelBusy = ref(false)
-
-function statusOf(e: unknown): number | undefined {
-  const x = e as { statusCode?: number; status?: number; response?: { status?: number } }
-  return x.statusCode ?? x.status ?? x.response?.status
-}
-
-async function cancelEffect(r: PersonRequest): Promise<{ summary: string; token: string }> {
-  return $fetch<{ summary: string; token: string }>(`/api/admin/requests/${r.id}/effect`, { query: { action: 'cancel' } })
-}
-
-// REQ-010, REQ-025: Cancel opens the confirmation naming the days cancelled and the days that stay; nothing changes yet.
-async function startCancel(r: PersonRequest) {
-  problem.value = ''
-  done.value = ''
-  try {
-    const effect = await cancelEffect(r)
-    cancelling.value = { request: r, summary: effect.summary, token: effect.token, problem: '' }
-  } catch (e) {
-    problem.value = refusalMessage(e, 'This request cannot be cancelled now.')
-    await refreshTheirs()
-  }
-}
-
-async function confirmCancel() {
-  const c = cancelling.value
-  if (!c || c.token === null || cancelBusy.value) return
-  cancelBusy.value = true
-  try {
-    await $fetch(`/api/admin/requests/${c.request.id}/cancel`, { method: 'POST', body: { token: c.token } })
-    done.value = `The cancelled days of ${person.value?.name ?? 'this person'}'s request are given back and off the calendar.`
-    cancelling.value = null
-    await Promise.all([refreshTheirs(), refreshHistory()])
-  } catch (e) {
-    const message = refusalMessage(e, 'The request was not cancelled. Nothing was changed.')
-    if (statusOf(e) === 409) {
-      // REQ-025 arm 5: what was shown no longer holds; show the confirmation again as it now is.
-      try {
-        const effect = await cancelEffect(c.request)
-        cancelling.value = { request: c.request, summary: effect.summary, token: effect.token, problem: message }
-      } catch (again) {
-        cancelling.value = null
-        problem.value = refusalMessage(again, message)
-        await refreshTheirs()
-      }
-    } else {
-      c.problem = message
-    }
-  } finally {
-    cancelBusy.value = false
-  }
-}
+const problem = ref('')
+const done = ref('')
+// REQ-010, REQ-025: the admin's two-step cancel, the same flow the admin's own page opens (REQ-029, A-061).
+const { cancelling, cancelBusy, startCancel, confirmCancel, closeCancel } = useAdminCancel<PersonRequest>({
+  problem,
+  done,
+  doneMessage: () => `The cancelled days of ${person.value?.name ?? 'this person'}'s request are given back and off the calendar.`,
+  refresh: () => Promise.all([refreshTheirs(), refreshHistory()]),
+})
 const person = computed(() => people.value.find((p) => String(p.id) === id.value) ?? null)
 const own = computed(() => person.value !== null && me.value !== null && person.value.id === me.value.id)
 
@@ -125,8 +74,6 @@ const password = ref('')
 const again = ref('')
 const allowance = ref<number | null>(person.value.allowance)
 const startsNextYear = ref(false)
-const problem = ref('')
-const done = ref('')
 
 async function act(path: string, body: Record<string, unknown>, success: string) {
   problem.value = ''
@@ -218,7 +165,7 @@ function saveAllowance() {
       :problem="cancelling.problem"
       :busy="cancelBusy"
       @confirm="confirmCancel"
-      @close="cancelling = null"
+      @close="closeCancel"
     />
 
     <h2>Name</h2>
