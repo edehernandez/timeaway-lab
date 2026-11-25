@@ -169,7 +169,8 @@ function saveAllowance() {
 
     <h2>Requests</h2>
     <p v-if="!theirs.requests.length">{{ person.name }} has sent no requests.</p>
-    <table v-else class="requests">
+    <!-- REQ-012, ROW-210: at phone width the rows stack, each cell led by its column's name (main.css "stack"). -->
+    <table v-else class="requests stack">
       <thead>
         <tr>
           <th scope="col">Kind</th>
@@ -184,19 +185,19 @@ function saveAllowance() {
       </thead>
       <tbody>
         <tr v-for="r in theirs.requests" :key="r.id">
-          <td>{{ shownWord(r.kind) }}</td>
-          <td>{{ shownRange(r.firstDay, r.lastDay) }}</td>
-          <td>
+          <td data-label="Kind">{{ shownWord(r.kind) }}</td>
+          <td data-label="Days">{{ shownRange(r.firstDay, r.lastDay) }}</td>
+          <td data-label="Weekdays">
             {{ shownCount(r.countedDays) }}<template v-if="r.cancelFrom">: {{ r.inEffectDays }} in effect, {{ r.cancelledDays }} cancelled</template>
           </td>
-          <td>{{ shownWord(r.state) }}</td>
+          <td data-label="State">{{ shownWord(r.state) }}</td>
           <!-- REQ-017, ROW-139: when it was sent, as its team-zone date and time. -->
-          <td>{{ shownInstant(r.sentAt, theirs.timeZone) }}</td>
-          <td>
+          <td data-label="Sent">{{ shownInstant(r.sentAt, theirs.timeZone) }}</td>
+          <td data-label="Decided">
             <template v-if="r.decidedAt">by {{ r.decidedBy ?? 'unknown' }}, {{ shownInstant(r.decidedAt, theirs.timeZone) }}</template>
             <template v-if="r.rejectionNote"><br>Note: {{ r.rejectionNote }}</template>
           </td>
-          <td>
+          <td data-label="Cancelled">
             <template v-if="r.cancelledAt">
               <template v-if="r.cancelFrom">From {{ shownDay(r.cancelFrom) }}, </template>by {{ r.cancelledBy ?? 'unknown' }}, {{ shownInstant(r.cancelledAt, theirs.timeZone) }}
             </template>
