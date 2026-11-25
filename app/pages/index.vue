@@ -38,39 +38,19 @@ const sentNotice = useState<string>('sent-notice', () => '')
 const notice = ref(sentNotice.value)
 sentNotice.value = ''
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+// ROW-138: a YYYY-MM-DD day is drawn by the shared shownDay ("Tue 29 December 2026", read from its text only), so
+// this page draws every date in the one shape the other pages and the confirmations draw (app/utils/days.ts).
+const shown = shownDay
 
-/** A YYYY-MM-DD day as "29 February 2028", read from its text only. */
-function shown(day: string): string {
-  const [y, m, d] = day.split('-')
-  return `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`
-}
-
-/** REQ-006 arm 7: an instant shown as its day and time in the team's time zone (D-007), never the browser's. */
+/** REQ-006 arm 7, ROW-138: an instant shown as its day and time in the team's time zone (D-007), never the browser's. */
 function shownAt(iso: string): string {
-  try {
-    return new Intl.DateTimeFormat('en-GB', {
-      timeZone: data.value?.timeZone,
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hourCycle: 'h23',
-    }).format(new Date(iso))
-  } catch {
-    return iso
-  }
+  return shownInstant(iso, data.value?.timeZone)
 }
 
 /** REQ-007 arm 5: a negative figure keeps its minus sign. */
-function figure(n: number): string {
-  return n < 0 ? `-${Math.abs(n)}` : String(n)
-}
+const figure = shownFigure
 
-function label(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1)
-}
+const label = shownWord
 
 // REQ-005: a person cancels their own pending request; the server decides whether it still may.
 async function cancel(id: number) {
