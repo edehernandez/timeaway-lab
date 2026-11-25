@@ -7,8 +7,11 @@
 // The server's zone: the product runs in the container's UTC (BASELINE "Test environment"), far from both the team
 // zone and the browser zone in each case, so a product that converts a day through the server's zone is caught here;
 // a change of the server process's zone itself is ROW-137's, and needs a harness control this harness lacks.
+// The calendar is paint too: read as painted (robustness.ts readGrid — dated cells and weekday headings by their boxes)
+// on /calendar in browser zones at both extremes of UTC (slice 1 addition, batch test-author-10).
 import { test, expect, type Browser } from '@playwright/test';
-import { approve, PAGES, type AccountId } from './harness';
+import { approve, freshName, PAGES, type AccountId } from './harness';
+import { readGrid, settle, shownMonth } from './robustness';
 import {
   addDays,
   addMember,
@@ -177,4 +180,166 @@ test('ROW-130.REQ-017.days-stay-put-team-east-browser-west', async ({ browser })
 
 test('ROW-130.REQ-017.days-stay-put-team-west-browser-east', async ({ browser }) => {
   await runConfig(browser, WEST);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// The calendar painted in browser zones on both sides of UTC (added: test-author pass, slice 1, batch test-author-10)
+// ---------------------------------------------------------------------------------------------------
+
+/** Browser zones on both sides of UTC, to the extremes: a day placed through the browser's zone moves in one of them. */
+const BROWSER_ZONES = [LOS_ANGELES, 'Pacific/Pago_Pago', AUCKLAND, 'Pacific/Kiritimati'];
+
+/** The months each team's calendar is painted in: every month holding a range's end or a daylight-saving change, and one middle month. */
+const CALENDAR_MONTHS: Record<'EAST' | 'WEST', number[]> = { EAST: [3, 4, 6, 9, 10], WEST: [3, 6, 11] };
+
+interface Approved {
+  team: Awaited<ReturnType<typeof startTeam>>;
+  vera: Awaited<ReturnType<typeof addMember>>;
+  sami: Awaited<ReturnType<typeof addMember>>;
+  /** The weekdays each person is away, by the test's own UTC oracle. */
+  veraDays: Set<string>;
+  samiDays: Set<string>;
+}
+
+/** The config's ranges sent by two members named apart (no name a substring of the other) and approved, as setup. */
+async function approvedWorld(cfg: Config): Promise<Approved> {
+  const team = await startTeam({ zone: cfg.teamZone, now: teamInstant(cfg.teamZone, cfg.sentOn, '15:00') });
+  const vera = await addMember(team, { allowance: 25, name: freshName('Vera') });
+  const sami = await addMember(team, { allowance: 25, name: freshName('Sami') });
+  for (const [firstDay, lastDay] of cfg.vacations) await approve(team.admin, await sendOk(vera.actor, { kind: 'vacation', firstDay, lastDay }));
+  await approve(team.admin, await sendOk(sami.actor, { kind: 'sick', firstDay: cfg.sick[0], lastDay: cfg.sick[1] }));
+  return {
+    team,
+    vera,
+    sami,
+    veraDays: new Set(cfg.vacations.flatMap(([a, b]) => weekdaysBetween(a, b))),
+    samiDays: new Set(weekdaysBetween(cfg.sick[0], cfg.sick[1])),
+  };
+}
+
+const MONTH_WORDS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function utcWeekday(ymd: string): number {
+  return new Date(`${ymd}T00:00:00Z`).getUTCDay();
+}
+
+function weekdaysOfMonth(year: number, month: number): string[] {
+  const mm = String(month).padStart(2, '0');
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return weekdaysBetween(`${year}-${mm}-01`, `${year}-${mm}-${String(last).padStart(2, '0')}`);
+}
+
+/**
+ * Opens /calendar for one month in one browser zone and lists every way the painted grid puts a day off its own date:
+ * the month shown and titled, every weekday of the month drawn, each dated cell's own day number, each cell under its
+ * own weekday's heading, and each person named in exactly the cells of their away weekdays (neighbouring-month cells
+ * included) — never the day before or after.
+ */
+async function calendarProblems(browser: Browser, w: Approved, browserZone: string, year: number, month: number): Promise<string[]> {
+  const ym = `${year}-${String(month).padStart(2, '0')}`;
+  const names = [w.vera.member.name, w.sami.member.name];
+  const opened = await openPageIn(browser, w.vera.actor, { timezoneId: browserZone });
+  const out: string[] = [];
+  try {
+    const res = await opened.page.goto(`/calendar?year=${year}&month=${month}`);
+    if (res?.status() !== 200) return [`/calendar?year=${year}&month=${month} answered ${res?.status()}`];
+    await settle(opened.page);
+    const anyAway = [...w.veraDays, ...w.samiDays].some((d) => d.startsWith(ym));
+    // A bounded wait for the month's cells (and, when anyone is away in it, a name) to be painted; no sleep.
+    await expect
+      .poll(
+        async () => {
+          const g = await readGrid(opened.page);
+          return g.cells.some((c) => c.date.startsWith(ym)) && (!anyAway || g.cells.some((c) => names.some((n) => c.text.includes(n))));
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true)
+      .catch(() => undefined);
+    const grid = await readGrid(opened.page);
+
+    if (shownMonth(grid.cells) !== ym) out.push(`the grid shows ${shownMonth(grid.cells)}, not ${ym}`);
+    const lines = (await opened.page.locator('body').innerText().catch(() => '')).split('\n');
+    const word = MONTH_WORDS[month - 1];
+    const hasWord = (l: string | undefined) => new RegExp(`\\b${word}\\b`).test(l ?? '');
+    const hasYear = (l: string | undefined) => new RegExp(`\\b${year}\\b`).test(l ?? '');
+    const titled = lines.some((l, i) => hasWord(l) && (hasYear(l) || hasYear(lines[i + 1])));
+    if (!titled) out.push(`no line names ${word} ${year}`);
+
+    for (const d of weekdaysOfMonth(year, month)) if (!grid.cells.some((c) => c.date === d)) out.push(`${d}: no cell`);
+
+    for (const c of grid.cells) {
+      const veraShown = c.text.includes(w.vera.member.name);
+      const samiShown = c.text.includes(w.sami.member.name);
+      if (veraShown !== w.veraDays.has(c.date)) out.push(`${c.date}: Vera ${veraShown ? 'shown' : 'missing'}`);
+      if (samiShown !== w.samiDays.has(c.date)) out.push(`${c.date}: Sami ${samiShown ? 'shown' : 'missing'}`);
+      let bare = c.text;
+      for (const n of names) bare = bare.split(n).join(' ');
+      const first = (bare.match(/\d+/) ?? [])[0];
+      if (first === undefined || Number(first) !== Number(c.date.slice(8, 10))) out.push(`${c.date}: its cell's day number reads ${first}`);
+      const above = new Set(grid.headings.filter((h) => c.cx >= h.left - 1 && c.cx <= h.right + 1 && h.bottom <= c.top + 2).map((h) => h.weekday));
+      if (above.size !== 1 || !above.has(utcWeekday(c.date))) out.push(`${c.date} (weekday ${utcWeekday(c.date)}) under heading ${[...above].join('/') || 'none'}`);
+    }
+  } finally {
+    await opened.close();
+  }
+  return out;
+}
+
+async function runCalendarConfig(browser: Browser, cfg: Config, key: 'EAST' | 'WEST'): Promise<void> {
+  const w = await approvedWorld(cfg);
+  const team = cfg.teamZone === AUCKLAND ? 'team Pacific/Auckland' : 'team America/Los_Angeles';
+  for (const zone of BROWSER_ZONES) {
+    const say = `ROW-130 (${team}, browser ${zone})`;
+    for (const m of CALENDAR_MONTHS[key]) {
+      expect.soft(await calendarProblems(browser, w, zone, 2027, m), `${say} /calendar 2027-${m}: every away day painted on its own date`).toEqual([]);
+    }
+    // The other pages the row names, in the same browser zone: each first and last day shown as that day, never the day either side.
+    const vDays = cfg.vacations.flat();
+    const vDecoys = cfg.vacations.flatMap(([a, b]) => [addDays(a, -1), addDays(b, 1)]);
+    const sDecoys = [addDays(cfg.sick[0], -1), addDays(cfg.sick[1], 1)];
+    await checkShown(browser, w.vera.actor, zone, PAGES.home, vDays, vDecoys, say);
+    await checkShown(browser, w.sami.actor, zone, PAGES.home, [...cfg.sick], sDecoys, say);
+    await checkShown(browser, w.team.admin, zone, PAGES.adminPerson(w.vera.member.id), vDays, vDecoys, say);
+    await checkShown(browser, w.team.admin, zone, PAGES.adminPerson(w.sami.member.id), [...cfg.sick], sDecoys, say);
+  }
+}
+
+// ROW-130 promise: as above — REQ-012 (the calendar lists by name, for each Monday to Friday day, the people with an
+// ROW-130   approved request covering it), REQ-017 (the first and last day as sent) and D-007 (days are calendar dates,
+// ROW-130   never instants): each approved day is painted on its own date whatever the browser's zone.
+// ROW-130 wrong product: a calendar page that places a day by new Date('2027-04-05').getDate() (or getDay() for its
+// ROW-130   column, or builds its cells as local midnights and keys them with toISOString()): in America/Los_Angeles or
+// ROW-130   Pacific/Pago_Pago every away day lands one cell early, in Pacific/Auckland or Pacific/Kiritimati one cell
+// ROW-130   late, while the container's UTC — the only zone the other tests paint the calendar in — shows it right.
+// ROW-130 given: per case a team in one zone (Auckland, then Los Angeles); Vera's two approved vacations each across
+// ROW-130   one of its daylight-saving changes; Sami's approved sick range across both. when: Vera opens /calendar for
+// ROW-130   each month holding a range's end or a change, and one middle month, in browsers set to Los Angeles,
+// ROW-130   Pago Pago, Auckland and Kiritimati; Vera and Sami open /, and the admin each one's person page, in the same
+// ROW-130   browsers. then: the grid shows and titles the asked month, draws every weekday of it, each dated cell reads
+// ROW-130   its own day number and sits under its own weekday's heading, and each name is in exactly the cells of that
+// ROW-130   person's away weekdays (the oracle's), never the cell before or after; the other pages show each first and
+// ROW-130   last day as that day and never the day before the first or after the last.
+// ROW-130 controls: the control case paints one approved day in a browser in the team's own zone — the fixture, the
+// ROW-130   address reading and the grid reading work, untouched by a browser-zone fault (the browser and the team agree).
+// ROW-130 technique: the clock's origin — browser zones at both extremes of UTC, each crossing the date line against
+// ROW-130   the stored day — with the neighbouring cells as decoys, against the test's own UTC weekday oracle.
+// ROW-130 cases: ROW-130 target=ROW-130.REQ-012.calendar-paints-days-on-their-dates-in-every-browser-zone-team-east control=ROW-130.control.calendar-paints-one-day-with-the-browser-in-the-team-zone
+test('ROW-130.control.calendar-paints-one-day-with-the-browser-in-the-team-zone', async ({ browser }) => {
+  const team = await startTeam({ zone: AUCKLAND, now: teamInstant(AUCKLAND, '2027-03-10', '15:00') });
+  const vera = await addMember(team, { name: freshName('Vera') });
+  const sami = await addMember(team, { name: freshName('Sami') });
+  await approve(team.admin, await sendOk(vera.actor, { kind: 'vacation', firstDay: '2027-05-12', lastDay: '2027-05-12' }));
+  const w: Approved = { team, vera, sami, veraDays: new Set(['2027-05-12']), samiDays: new Set() };
+  expect(await calendarProblems(browser, w, AUCKLAND, 2027, 5), 'ROW-130 control: 12 May painted on 12 May, browser in the team zone').toEqual([]);
+});
+
+test('ROW-130.REQ-012.calendar-paints-days-on-their-dates-in-every-browser-zone-team-east', async ({ browser }) => {
+  test.setTimeout(600_000);
+  await runCalendarConfig(browser, EAST, 'EAST');
+});
+
+test('ROW-130.REQ-012.calendar-paints-days-on-their-dates-in-every-browser-zone-team-west', async ({ browser }) => {
+  test.setTimeout(600_000);
+  await runCalendarConfig(browser, WEST, 'WEST');
 });
