@@ -527,7 +527,7 @@ review: delta, round 1, 0 findings
 
 ### 2026-11-25 (held rows rulings)
 
-VID-QUESTION: (OQ-12) When two display names are compared for uniqueness, should invisible characters (zero-width space, word joiner and the like) be ignored, as letter case and surrounding spaces already are, so "Ana" and "Ana" followed by a zero-width space cannot both be switched on?
+RESOLVED: (OQ-12) A-058 — When two display names are compared for uniqueness, should invisible characters (zero-width space, word joiner and the like) be ignored, as letter case and surrounding spaces already are, so "Ana" and "Ana" followed by a zero-width space cannot both be switched on?
 
 ```vid-prd-answers
 A-053 | human | 2026-11-25 | Q: five rows whose tests fell short twice — ROW-130 and ROW-158 (time zones), ROW-206 (refusals), ROW-226 (error answers) and ROW-268 (the change history) — narrow them, give them one more test round, or record known limits? | A: one more test round each, as recommended | settles: REQ-013 | unchanged: REQ-001, REQ-006, REQ-013, REQ-017, REQ-028, INV-001
@@ -554,3 +554,21 @@ F-146 | review | advisory | A-057, REQ-014, INVENTORY.md:ROW-222 | repaired | ev
 ```
 
 review: delta, round 3, 13 findings
+
+### 2026-11-25 (name uniqueness ruling)
+
+```vid-prd-answers
+A-058 | human | 2026-11-25 | Q: (OQ-12) when two display names are compared for uniqueness, should invisible characters (zero-width space, word joiner and the like) be ignored, as letter case and surrounding spaces already are? | A: yes, as recommended — characters that display as nothing (the Unicode default-ignorable code points) are ignored, wherever they sit, when display names are compared | settles: REQ-024
+```
+
+```vid-prd
+REQ-024 AMENDED | functional | T1 | A display name already used by another switched-on account, compared after Unicode canonical normalization (NFC) and without regard to letter case, surrounding white space (the Unicode White_Space characters, the no-break space included) or characters that display as nothing (the Unicode default-ignorable code points, wherever they sit in the name), is refused when an account is created, renamed or switched on. | fail-if: (1) two switched-on accounts hold the same display name, compared after NFC normalization and ignoring letter case, surrounding white space (the Unicode White_Space characters) and characters that display as nothing (the Unicode default-ignorable code points, wherever they sit); (2) a name used only by a switched-off account is refused | serves: G3 — the calendar names people unambiguously | authority: authoritative | source: A-037, A-058 | covers: DIM-data-integrity/dedup | phase: pilot | feature: FEAT-06 | arms: 1 strengthened, 2 retained | plain: Two switched-on accounts can never share a display name, ignoring letter case and invisible characters.
+```
+
+```vid-prd-findings
+F-147 | review | blocking | INVENTORY.md:ROW-254, INVENTORY.md:ROW-255, REQ-024 | repaired | evidence: round 1 — the rows kept arm 1's old words and their test had no invisible-character case; repaired: ROW-254 and ROW-255 restate the amended arms with cases at create, rename and switch-on, mixes with surrounding spaces in either order, and a switched-off holder; a test-author round, then each is seen red before its stamp moves
+F-148 | review | advisory | REQ-024, INVENTORY.md:ROW-216 | repaired | evidence: round 1 — invisible characters had no defined set; repaired: REQ-024 and ROW-216 name one class, characters that display as nothing (the Unicode default-ignorable code points), wherever they sit
+F-149 | review | advisory | REQ-024, INVENTORY.md:ROW-254, INVENTORY.md:ROW-216 | repaired | evidence: round 2 — which spaces count was undefined and canonically equivalent forms compared unequal; repaired: names compare after NFC, surrounding white space is every Unicode White_Space character, the same in ROW-216's blank test, with cases for a no-break space, an ideographic space and an NFC/NFD pair
+```
+
+review: delta, round 3, 3 findings
