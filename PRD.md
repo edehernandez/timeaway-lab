@@ -499,3 +499,19 @@ F-130 | review | advisory | A-049, REQ-014 | repaired | evidence: round 1 — A-
 ```
 
 review: delta, round 2, 1 findings
+
+### 2026-11-25 (double-submit ruling)
+
+VID-QUESTION: (OQ-11) Should the rule that a double click, reload or Back never repeats a submit, nor shows a refusal of the person's own first submit, also cover every submitting control other than the send-request form — Cancel on a person's own requests, the change-password form, the forced new-password choice, the sign-in form, the admin's approve, reject, cancel and switch-off confirmations, and the people-page actions (create, rename, change email, set password, set allowance, switch)?
+
+```vid-prd-answers
+A-050 | human | 2026-11-25 | Q: does the rule that a double click, reload or Back never repeats a submitted form, nor shows a refusal of the person's own first submit, cover every submitting control a person operates, or only the send-request form? | A: (c) record it as a known limit: only the send-request form is covered; every other submitting control stays open as OQ-11 | settles: REQ-003 | unchanged: REQ-003, REQ-005, REQ-009, REQ-014, REQ-015, REQ-020, REQ-025, REQ-026
+```
+
+```vid-prd-findings
+F-131 | review | advisory | A-050 | repaired | evidence: round 1 — OQ-11 named only Cancel and the change-password form while the answer left every other submitting control uncovered; repaired: OQ-11 names every submitting control but the send-request form
+F-132 | review | advisory | A-050 | repaired | evidence: round 1 — A-050 ruled on controls of REQ-005 and REQ-015 without listing them unchanged; repaired: unchanged names REQ-005, REQ-014, REQ-015, REQ-020, REQ-025, REQ-026 beside REQ-003 and REQ-009
+F-133 | review | advisory | A-050 | repaired | evidence: round 1 — the heading's date (2026-11-25, UTC) disagreed with A-050's 2026-11-24; repaired: A-050 dated 2026-11-25, the UTC day the ruling was given
+```
+
+review: delta, round 2, 3 findings
