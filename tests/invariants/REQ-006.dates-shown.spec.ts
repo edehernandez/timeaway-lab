@@ -7,8 +7,13 @@
 // harness on the lists that are the pages' data (GET /api/requests, GET /api/admin/pending) and again on the pages.
 // A date "shown in full" is the day, the month as a word and the year together (team-calendar.ts shownDate); a page
 // that drops the year or the month from one end of a range does not show that date in the format.
-import { test, expect } from '@playwright/test';
-import { adminCancel, approve, PAGES, setClock, type AccountId } from './harness';
+// Slice 1, brief test-author-13: two ROW-138 cases added after ROW-138's first case — the person page's change history
+// at the team's 1 January 09:00 (UTC and the browser still on 31 December) shows 1 January 2027 on the entry itself;
+// and the drawn shape of every date (weekday or none, month full or short, order) is one shape across the own page,
+// the pending page, the person page and the approve, reject and cancel confirmations. Every earlier assertion kept.
+import { test, expect, type Browser, type Page } from '@playwright/test';
+import { adminCancel, approve, freshName, PAGES, rename, setAllowance, setClock, type AccountId, type Actor, type Member } from './harness';
+import { actionControl, freshInt, openConfirmation } from './admin-kit';
 import {
   addMember,
   AUCKLAND,
@@ -27,7 +32,9 @@ import {
   teamDateOf,
   teamInstant,
   teamTimeOf,
+  utcDateOf,
   type Rec,
+  type Team,
 } from './team-calendar';
 
 test.afterEach(async () => {
@@ -95,6 +102,236 @@ test('ROW-138.REQ-006.year-end-dates-show-their-calendar-year-in-one-format', as
     await opened.close();
   }
   expect.soft(dayFirst > 0 && monthFirst > 0, `ROW-138: one format across the pages (day-first ${dayFirst}, month-first ${monthFirst})`).toBe(false);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-138, the change history (slice 1, brief test-author-13)
+// ---------------------------------------------------------------------------------------------------
+
+function literally(s: string): RegExp {
+  return new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+}
+
+function wholeNumber(n: number): RegExp {
+  return new RegExp(`(?<!\\d)${n}(?!\\d)`);
+}
+
+/** The blocks of the page (list items, table rows, sections, divisions…) that carry every one of `has` and none of `hasNot`. */
+function blocksWith(page: Page, has: (string | RegExp)[], hasNot: RegExp[]) {
+  let loc = page.locator('li, tr, article, section, div, p, dd, dl, details, tbody, table, ul, ol');
+  for (const h of has) loc = loc.filter({ hasText: h });
+  for (const n of hasNot) loc = loc.filter({ hasNotText: n });
+  return loc;
+}
+
+// ROW-138 promise: ROW-138 "every date the product shows uses one unambiguous format with the month as a word, and
+// ROW-138   the calendar year: … 1 to 3 January show the right year"; A-023 (each allowance change and rename records who
+// ROW-138   did it and when), shown on the admin's person page (D-029's /admin/people/:id).
+// ROW-138 wrong product: a person page whose change history draws the stored instant ("2026-12-31T20:00:00Z UTC",
+// ROW-138   "31/12/2026") or its UTC or browser date (31 December 2026), or a week-numbering year (1 January 2026), for
+// ROW-138   a change made at the team's 1 January 2027 09:00 — the moment when UTC and the browser are still in 2026.
+// ROW-138 given: Pacific/Auckland team; the member made on 15 Dec 2026 14:00 (UTC 01:00 the same day) as n0, renamed
+// ROW-138   n0 → n1 and allowance 25 → a1 then; at 1 Jan 2027 09:00 team time (31 Dec 20:00 UTC, 31 Dec 12:00 in the
+// ROW-138   browser's Los Angeles) renamed n1 → n2 and allowance a1 → a2 (a1, a2 fresh, above 31 so no day number is one).
+// ROW-138   when: the admin opens /admin/people/:id in an en-US Los Angeles browser, before and after the 1 January
+// ROW-138   changes. then: before, the page shows 15 December 2026 and no 1 January 2027; after, the block holding the
+// ROW-138   rename (n1 and n2, not the 15 December date) shows 1 January 2027 in full, and so does the block holding the
+// ROW-138   allowance change (a1 and a2, not the 15 December date); the page shows no 31 December 2026, no 1 January
+// ROW-138   2026, no date with a number month and no "UTC".
+// ROW-138 controls: the control case renames on 15 December and finds both names drawn on the person page — the page
+// ROW-138   draws the history, untouched by how a date is formatted.
+// ROW-138 technique: the clock's origin — the one hour of the year when the team, UTC and the browser are in different
+// ROW-138   years — with the UTC date, the browser date and the week-year as decoys, read on the entry's own block,
+// ROW-138   never "somewhere on the page", and an earlier entry as the near miss that must not be the block matched.
+// ROW-138 cases: ROW-138 target=ROW-138.admin-person-page.change-history-at-new-year-shows-the-team-calendar-year control=ROW-138.control.the-person-page-draws-the-change-history
+test('ROW-138.control.the-person-page-draws-the-change-history', async ({ browser }) => {
+  const team = await startTeam({ zone: AUCKLAND, now: teamInstant(AUCKLAND, '2026-12-15', '14:00') });
+  const n0 = freshName('Ilse');
+  const n1 = freshName('Ilse');
+  const { member } = await addMember(team, { name: n0 });
+  await rename(team.admin, member.id, n1);
+  const opened = await openPageIn(browser, team.admin, BROWSER);
+  const text = await pageTextWhen(opened, PAGES.adminPerson(member.id), [literally(n0), literally(n1)]);
+  expect.soft(text.includes(n1), `ROW-138 control: the person page draws the new name ${n1}`).toBe(true);
+  expect.soft(text.includes(n0), `ROW-138 control: the person page draws the rename's earlier name ${n0}`).toBe(true);
+});
+
+test('ROW-138.admin-person-page.change-history-at-new-year-shows-the-team-calendar-year', async ({ browser }) => {
+  const team = await startTeam({ zone: AUCKLAND, now: teamInstant(AUCKLAND, '2026-12-15', '14:00') });
+  const [n0, n1, n2] = [freshName('Ilse'), freshName('Ilse'), freshName('Ilse')];
+  const a1 = freshInt(41, 49);
+  const a2 = freshInt(51, 59);
+  const { member } = await addMember(team, { name: n0, allowance: 25 });
+  await rename(team.admin, member.id, n1);
+  await setAllowance(team.admin, member.id, a1);
+
+  const before = await openPageIn(browser, team.admin, BROWSER);
+  const bText = await pageTextWhen(before, PAGES.adminPerson(member.id), [literally(n1), shownDate('2026-12-15')]);
+  expect.soft(shownDate('2026-12-15').test(bText), 'ROW-138 before: the person page shows the 15 December 2026 changes in full').toBe(true);
+  expect(shownDate('2027-01-01').test(bText), 'ROW-138 before: the person page shows no 1 January 2027 yet').toBe(false);
+  await before.close();
+
+  const newYear = await setTeamClock(AUCKLAND, '2027-01-01', '09:00');
+  expect(utcDateOf(newYear) === '2026-12-31' && teamDateOf(LOS_ANGELES, newYear) === '2026-12-31', 'ROW-138 setup: UTC and the browser are still on 31 December 2026').toBe(true);
+  await rename(team.admin, member.id, n2);
+  await setAllowance(team.admin, member.id, a2);
+
+  const after = await openPageIn(browser, team.admin, BROWSER);
+  const page = after.page;
+  const text = await pageTextWhen(after, PAGES.adminPerson(member.id), [literally(n2), literally(n1), shownDate('2027-01-01')]);
+  const earlier = shownDate('2026-12-15');
+  expect.soft(
+    await blocksWith(page, [literally(n1), literally(n2), shownDate('2027-01-01')], [earlier]).count(),
+    `ROW-138: the rename ${n1} → ${n2} is drawn with 1 January 2027 in full, on its own entry — the page shows: ${JSON.stringify(text.slice(0, 1500))}`,
+  ).toBeGreaterThan(0);
+  expect.soft(
+    await blocksWith(page, [wholeNumber(a1), wholeNumber(a2), shownDate('2027-01-01')], [earlier]).count(),
+    `ROW-138: the allowance change ${a1} → ${a2} is drawn with 1 January 2027 in full, on its own entry`,
+  ).toBeGreaterThan(0);
+  expect.soft(shownDate('2026-12-31').test(text), 'ROW-138: 31 December 2026, the UTC and browser date of the 1 January changes, is not shown').toBe(false);
+  expect.soft(shownDate('2026-01-01').test(text), 'ROW-138: 1 January 2026, the week-year of 1 January 2027, is not shown').toBe(false);
+  expect.soft(text.match(NUMERIC_DATE)?.[0] ?? null, 'ROW-138: the person page shows no date with a number month').toBeNull();
+  expect.soft(text.match(/\bUTC\b/)?.[0] ?? null, 'ROW-138: the person page shows no UTC time').toBeNull();
+  expect.soft(shownDate('2026-12-15').test(text), 'ROW-138: the 15 December 2026 changes are still shown in full').toBe(true);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-138, one format across the pages and the confirmations (slice 1, brief test-author-13)
+// ---------------------------------------------------------------------------------------------------
+
+const WEEKDAY_WORDS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const WEEKDAY_SHORT = ['Thurs', 'Tues', 'Thur', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTH_WORDS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const MONTH_SHORT = ['Sept', 'Jan', 'Feb', 'Mar', 'Apr', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WD_RE = `(?:${[...WEEKDAY_WORDS, ...WEEKDAY_SHORT].join('|')})`;
+const MON_RE = `(?:${[...MONTH_WORDS, ...MONTH_SHORT].join('|')})`;
+/** Any date drawn with the month as a word and a year, with the weekday before it when one is drawn. */
+const DRAWN_DATE = new RegExp(
+  `(?:\\b${WD_RE}\\.?,?\\s+)?(?:\\b\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MON_RE}\\.?,?\\s+\\d{4}\\b|\\b${MON_RE}\\.?\\s+\\d{1,2}(?:st|nd|rd|th)?,?\\s+\\d{4}\\b)`,
+  'gi',
+);
+
+/** A drawn date's shape: "Tue 29 Dec 2026" → "Www D MMM YYYY", "December 29, 2026" → "MMMM D, YYYY" (a zero before a day is not told apart). */
+function shapeOf(drawn: string): string {
+  return drawn
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(new RegExp(`\\b(?:${WEEKDAY_WORDS.join('|')})\\b`, 'gi'), 'Wwww')
+    .replace(new RegExp(`\\b(?:${WEEKDAY_SHORT.join('|')})\\b`, 'gi'), 'Www')
+    .replace(new RegExp(`\\b(?:${MONTH_WORDS.join('|')})\\b`, 'gi'), 'MMMM')
+    .replace(new RegExp(`\\b(?:${MONTH_SHORT.join('|')})\\b`, 'gi'), 'MMM')
+    .replace(/\b\d{4}\b/g, 'YYYY')
+    .replace(/\d{1,2}/g, 'D');
+}
+
+/** Every drawn date of a text, as written. */
+function drawnDates(text: string): string[] {
+  return text.match(DRAWN_DATE) ?? [];
+}
+
+const FORMAT_DAY = '2026-12-29'; // a Tuesday
+
+interface FormatWorld {
+  team: Team;
+  member: Member;
+  actor: Actor;
+  name: string;
+  id: AccountId;
+}
+
+/** Auckland, 1 Dec 2026 15:00: a member renamed (one change-history entry) with a pending vacation 29–31 Dec 2026. */
+async function formatWorld(): Promise<FormatWorld> {
+  const team = await startTeam({ zone: AUCKLAND, now: teamInstant(AUCKLAND, '2026-12-01', '15:00') });
+  const { member, actor } = await addMember(team, { name: freshName('Ilse'), allowance: 25 });
+  const name = freshName('Ilse');
+  await rename(team.admin, member.id, name);
+  const id = await sendOk(actor, { kind: 'vacation', firstDay: FORMAT_DAY, lastDay: '2026-12-31' });
+  return { team, member, actor, name, id };
+}
+
+/** Opens `path` as `who` and returns what the page draws once it shows FORMAT_DAY in full (or the bounded wait ran out). */
+async function drawnPage(browser: Browser, who: Actor, path: string): Promise<string> {
+  const opened = await openPageIn(browser, who, BROWSER);
+  const text = await pageTextWhen(opened, path, [shownDate(FORMAT_DAY)]);
+  await opened.close();
+  return text;
+}
+
+/** Opens the pending page as the admin, operates the member's `verb` control and returns the confirmation's text (never confirmed). */
+async function drawnPendingConfirmation(browser: Browser, w: FormatWorld, verb: RegExp, what: string): Promise<string> {
+  const opened = await openPageIn(browser, w.team.admin, BROWSER);
+  await pageTextWhen(opened, PAGES.adminPending, [literally(w.name)]);
+  const conf = await openConfirmation(opened.page, actionControl(opened.page, w.name, [], verb), verb, what);
+  await opened.close();
+  return conf.text;
+}
+
+/** Opens the person page as the admin, operates the one visible cancel control and returns the confirmation's text (never confirmed). */
+async function drawnCancelConfirmation(browser: Browser, w: FormatWorld, what: string): Promise<string> {
+  const opened = await openPageIn(browser, w.team.admin, BROWSER);
+  const page = opened.page;
+  await pageTextWhen(opened, PAGES.adminPerson(w.member.id), [shownDate(FORMAT_DAY)]);
+  const cancel = page.getByRole('button', { name: /cancel/i }).or(page.getByRole('link', { name: /cancel/i })).filter({ visible: true }).first();
+  const conf = await openConfirmation(page, cancel, /cancel/i, what);
+  await opened.close();
+  return conf.text;
+}
+
+// ROW-138 promise: ROW-138 "every date the product shows uses ONE unambiguous format with the month as a word, and
+// ROW-138   the calendar year"; REQ-006 (the own page's first and last day, and when decided or cancelled), REQ-008 (the
+// ROW-138   pending page's first and last day), A-023 (when each change was made), the confirmations of D-029's effect.
+// ROW-138 wrong product: the own page draws "29 December 2026" while the pending page, the person page and the
+// ROW-138   confirmations draw "Tue 29 Dec 2026"; or the change history draws "December 1, 2026" beside "1 December 2026";
+// ROW-138   or a confirmation draws "Tuesday, 29 December 2026" — each page month-as-a-word, but not one format.
+// ROW-138 given: Auckland, 1 Dec 2026 15:00; a member renamed once (a change-history entry dated 1 December 2026) with
+// ROW-138   a pending vacation Tue 29 – Thu 31 Dec 2026. when: in an en-US Los Angeles browser, the member opens /; the
+// ROW-138   admin opens /admin/pending and /admin/people/:id, operates Approve and Reject on the pending page (read, never
+// ROW-138   confirmed), then — the request approved through the API — the cancel control on the person page (read, never
+// ROW-138   confirmed). then: each of the six draws 29 December 2026 in full; every drawn 29 December 2026 has one shape
+// ROW-138   (weekday or none, month full or short, the order and the punctuation) across all six; and every date with the
+// ROW-138   month as a word that any of the six draws has that same one shape.
+// ROW-138 controls: the control case opens the three pages and the approve confirmation and finds 29 December 2026
+// ROW-138   drawn in full on each — the sources are reached and draw the day, untouched by which shape they draw it in.
+// ROW-138 technique: one day drawn by every surface that shows it, compared by its drawn shape — the whole set of
+// ROW-138   shapes, never one page's — with the change-history date as a second kind of date on the same pages.
+// ROW-138 cases: ROW-138 target=ROW-138.one-format.the-same-day-is-drawn-alike-on-every-page-and-confirmation control=ROW-138.control.every-page-and-the-approve-confirmation-draw-the-day
+test('ROW-138.control.every-page-and-the-approve-confirmation-draw-the-day', async ({ browser }) => {
+  const w = await formatWorld();
+  const sources: [string, string][] = [
+    ['the own page /', await drawnPage(browser, w.actor, PAGES.home)],
+    ['the pending page', await drawnPage(browser, w.team.admin, PAGES.adminPending)],
+    ['the person page', await drawnPage(browser, w.team.admin, PAGES.adminPerson(w.member.id))],
+    ['the approve confirmation', await drawnPendingConfirmation(browser, w, /approve/i, 'ROW-138 control approve')],
+  ];
+  for (const [what, text] of sources) {
+    expect.soft(shownDate(FORMAT_DAY).test(text), `ROW-138 control: ${what} draws 29 December 2026 in full — it shows: ${JSON.stringify(text.slice(0, 800))}`).toBe(true);
+  }
+});
+
+test('ROW-138.one-format.the-same-day-is-drawn-alike-on-every-page-and-confirmation', async ({ browser }) => {
+  const w = await formatWorld();
+  const sources: [string, string][] = [
+    ['the own page /', await drawnPage(browser, w.actor, PAGES.home)],
+    ['the pending page', await drawnPage(browser, w.team.admin, PAGES.adminPending)],
+    ['the person page', await drawnPage(browser, w.team.admin, PAGES.adminPerson(w.member.id))],
+    ['the approve confirmation', await drawnPendingConfirmation(browser, w, /approve/i, 'ROW-138 approve')],
+    ['the reject confirmation', await drawnPendingConfirmation(browser, w, /reject/i, 'ROW-138 reject')],
+  ];
+  await approve(w.team.admin, w.id);
+  sources.push(['the cancel confirmation', await drawnCancelConfirmation(browser, w, 'ROW-138 cancel')]);
+
+  const dayShapes: Record<string, string[]> = {};
+  const allShapes: Record<string, string[]> = {};
+  for (const [what, text] of sources) {
+    expect.soft(shownDate(FORMAT_DAY).test(text), `ROW-138: ${what} draws 29 December 2026 in full — it shows: ${JSON.stringify(text.slice(0, 800))}`).toBe(true);
+    const drawn = drawnDates(text);
+    dayShapes[what] = [...new Set(drawn.filter((d) => shownDate(FORMAT_DAY).test(d)).map(shapeOf))];
+    allShapes[what] = [...new Set(drawn.map(shapeOf))];
+  }
+  const daySet = [...new Set(Object.values(dayShapes).flat())];
+  expect.soft(daySet.length, `ROW-138: 29 December 2026 is drawn in one shape everywhere — per source: ${JSON.stringify(dayShapes)}`).toBe(1);
+  const allSet = [...new Set(Object.values(allShapes).flat())];
+  expect.soft(allSet.length, `ROW-138: every date drawn with the month as a word has one shape everywhere — per source: ${JSON.stringify(allShapes)}`).toBe(1);
 });
 
 // ---------------------------------------------------------------------------------------------------
