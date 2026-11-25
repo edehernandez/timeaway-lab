@@ -5,8 +5,9 @@
 import { and, asc, desc, eq, inArray, lte, ne, sql } from 'drizzle-orm'
 import { db, inWriteTransaction, schema } from '~~/server/db'
 import { forgetAttempts, inWait, recordWrongAttempt } from './attempts'
-import { dateInZone, isTimeZone, nowIso, nowMs, setInjectedNow } from './clock'
-import { hashPassword, newPasswordProblem, verifyPassword } from './passwords'
+import { dateInZone, isNamedTimeZone, nowIso, nowMs, setInjectedNow } from './clock'
+import { disarmFault, faultPoint } from './faults'
+import { hashPassword, hashPasswordSync, newPasswordProblem, verifyPassword } from './passwords'
 import { isConstraintError, refuse } from './refusals'
 
 const { accounts, accountAllowances, accountEvents, sessions, settings } = schema
@@ -365,6 +366,7 @@ export async function setPassword(by: Actor, id: number, body: unknown): Promise
       .set({ passwordHash: hash, passwordVersion: target.passwordVersion + 1, mustChangePassword: 1 })
       .where(eq(accounts.id, id))
       .run()
+    faultPoint('password-set') // ROW-199, D-049: the fault door's step, after the first write.
     tx.delete(sessions).where(eq(sessions.accountId, id)).run()
     record(tx, id, by.id, 'password set by the admin')
   }, 'The password could not be set.')
@@ -398,6 +400,7 @@ export async function changeOwnPassword(who: Actor, body: unknown): Promise<void
       .set({ passwordHash: hash, passwordVersion: now.passwordVersion + 1, mustChangePassword: 0 })
       .where(eq(accounts.id, who.id))
       .run()
+    faultPoint('password-change') // ROW-199, D-049
     const keep = who.tokenHash ?? ''
     tx.delete(sessions)
       .where(and(eq(sessions.accountId, who.id), ne(sessions.tokenHash, keep)))
@@ -421,6 +424,7 @@ export function setAllowance(by: Actor, id: number, body: unknown): void {
     if (!accountById(tx, id)) refuse(404, 'There is no such account.')
     const old = allowanceIn(tx, id, startsYear)
     tx.insert(accountAllowances).values({ accountId: id, allowance, startsYear, madeAt: nowIso(), madeBy: by.id }).run()
+    faultPoint('allowance-change') // ROW-199, D-049
     record(tx, id, by.id, 'allowance set', old === null ? null : String(old), String(allowance), startsYear)
   }, 'The allowance could not be set.')
 }
@@ -482,7 +486,7 @@ export interface Setup {
 
 function setupFrom(body: unknown): Setup {
   const f = fieldsOf(body)
-  if (!isTimeZone(f.timeZone)) refuse(400, 'The team time zone must be a named zone such as Pacific/Auckland.')
+  if (!isNamedTimeZone(f.timeZone)) refuse(400, 'The team time zone must be a named zone such as Pacific/Auckland.')
   const a = fieldsOf(f.admin)
   return {
     timeZone: f.timeZone as string,
@@ -502,6 +506,7 @@ export async function resetForTest(body: unknown): Promise<void> {
   const hash = await hashPassword(setup.admin.password)
   setInjectedNow(typeof now === 'string' ? now : null)
   forgetAttempts()
+  disarmFault()
   inWriteTransaction((tx) => {
     tx.delete(sessions).run()
     tx.delete(accountEvents).run()
@@ -511,4 +516,69 @@ export async function resetForTest(body: unknown): Promise<void> {
     tx.insert(settings).values({ key: 'time_zone', value: setup.timeZone }).run()
     insertAccount(tx, { name: setup.admin.name, email: setup.admin.email, hash, allowance: setup.admin.allowance, isAdmin: true }, null)
   })
+}
+
+/** What the one-time setup command answers: its exit code and the text it prints (stdout and stderr). */
+export interface SetupOutcome {
+  exit: number
+  out: string
+  err: string
+}
+
+const SETUP_FLAGS = { '--name': 'name', '--email': 'email', '--password': 'password', '--allowance': 'allowance', '--time-zone': 'timeZone' } as const
+
+function setupRefusal(message: string): SetupOutcome {
+  return { exit: 1, out: '', err: `TimeAway setup refused: ${message}\n` }
+}
+
+/**
+ * D-011, CON-001, CON-003, D-013, ROW-136, ROW-186: the one-time setup command, run on the machine before anyone signs
+ * in: --name --email --password --allowance --time-zone create the one admin account and the team's named time zone.
+ * It refuses — changing nothing — without an explicitly chosen named zone (no default, no fixed offset), with any
+ * value missing or not allowed, and on a database that is already set up (it holds the team zone or any account).
+ * On success it shows the chosen zone. Synchronous throughout: it runs inside the built server before it listens
+ * (startup.ts), so it must end before the server would start.
+ */
+export function setupInstall(args: string[]): SetupOutcome {
+  const given: Record<string, string> = {}
+  for (let i = 0; i < args.length; i += 1) {
+    const flag = args[i] as keyof typeof SETUP_FLAGS
+    if (!Object.hasOwn(SETUP_FLAGS, flag)) {
+      return setupRefusal(`unknown argument ${JSON.stringify(args[i])}. Use --name, --email, --password, --allowance and --time-zone.`)
+    }
+    const value = args[i + 1]
+    if (value === undefined) return setupRefusal(`${flag} needs a value.`)
+    given[SETUP_FLAGS[flag]] = value
+    i += 1
+  }
+  if (given.timeZone === undefined || given.timeZone.trim() === '') {
+    return setupRefusal('choose the team time zone with --time-zone, a named zone such as Pacific/Auckland. There is no default.')
+  }
+  if (!isNamedTimeZone(given.timeZone)) {
+    return setupRefusal(
+      `${JSON.stringify(given.timeZone)} is not a named time zone this machine knows; give a name such as Pacific/Auckland, never a fixed offset.`,
+    )
+  }
+  let admin: { name: string; email: string; password: string; allowance: number }
+  try {
+    const allowance: unknown = /^[0-9]{1,3}$/.test(given.allowance ?? '') ? Number(given.allowance) : given.allowance
+    admin = { name: nameFrom(given.name), email: emailFrom(given.email), password: passwordFrom(given.password), allowance: allowanceFrom(allowance) }
+  } catch (e) {
+    return setupRefusal((e as { message?: string }).message ?? String(e))
+  }
+  const hash = hashPasswordSync(admin.password)
+  const done = inWriteTransaction((tx) => {
+    const hasAccount = tx.select({ id: accounts.id }).from(accounts).limit(1).get()
+    const hasSetting = tx.select({ key: settings.key }).from(settings).limit(1).get()
+    if (hasAccount || hasSetting) return false
+    tx.insert(settings).values({ key: 'time_zone', value: given.timeZone }).run()
+    insertAccount(tx, { name: admin.name, email: admin.email, hash, allowance: admin.allowance, isAdmin: true }, null)
+    return true
+  })
+  if (!done) return setupRefusal('this database is already set up (it holds the team). Nothing was changed.')
+  return {
+    exit: 0,
+    out: `TimeAway is set up.\nAdmin: ${admin.name} <${admin.email}>\nTeam time zone: ${given.timeZone}\n`,
+    err: '',
+  }
 }

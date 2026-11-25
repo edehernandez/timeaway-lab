@@ -43,6 +43,44 @@ export function isTimeZone(zone: unknown): zone is string {
   }
 }
 
+/**
+ * CON-003, D-013, ROW-136: true when `zone` is a NAMED time zone this runtime knows ("Pacific/Auckland", "UTC") —
+ * never a fixed offset ("+05:30", "UTC+2", "GMT-3"), which Intl would also take. A name is letters, digits, "_", "-",
+ * "+" in "/"-separated parts that start with a letter, and the runtime resolves it to a name, not to an offset.
+ */
+export function isNamedTimeZone(zone: unknown): zone is string {
+  if (typeof zone !== 'string' || zone !== zone.trim()) return false
+  if (!/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z][A-Za-z0-9_+-]*)*$/.test(zone)) return false
+  if (/^(UTC|GMT|UT|Z)[+-]/i.test(zone)) return false
+  try {
+    const resolved = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).resolvedOptions().timeZone
+    return typeof resolved === 'string' && !/^[+-]/.test(resolved)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * CON-003, ROW-136: the reason this runtime cannot work out a date in a named time zone (it has no time-zone data),
+ * or null when it can. Checked against instants whose dates are known: 2021-01-01 12:00 UTC is 2 January in
+ * Auckland and 1 January in Los Angeles, which a runtime that falls back to UTC or refuses the names gets wrong.
+ */
+export function timeZoneDataProblem(): string | null {
+  const instant = Date.UTC(2021, 0, 1, 12, 0, 0)
+  for (const [zone, want] of [
+    ['Pacific/Auckland', '2021-01-02'],
+    ['America/Los_Angeles', '2021-01-01'],
+  ] as const) {
+    try {
+      const got = dateInZone(instant, zone)
+      if (got !== want) return `the time zone ${zone} reads ${got} where ${want} is right`
+    } catch (e) {
+      return `the time zone ${zone} cannot be read (${e instanceof Error ? e.message : String(e)})`
+    }
+  }
+  return null
+}
+
 /** The calendar date (YYYY-MM-DD) that the wall clock in `zone` shows at the instant `ms` (D-007). */
 export function dateInZone(ms: number, zone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(

@@ -6,7 +6,18 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { and, asc, eq, gt, inArray, isNull, or } from 'drizzle-orm'
 import { db, inWriteTransaction, schema } from '~~/server/db'
-import { accountIdFrom, nowIso, personOf, requireLiveIn, switchOffIn, switchOffTarget, teamTimeZone, todayInTeamZone, type Actor } from '~~/server/domain/accounts'
+import {
+  accountIdFrom,
+  faultPoint,
+  nowIso,
+  personOf,
+  requireLiveIn,
+  switchOffIn,
+  switchOffTarget,
+  teamTimeZone,
+  todayInTeamZone,
+  type Actor,
+} from '~~/server/domain/accounts'
 import {
   balanceFor,
   daysInEffect,
@@ -270,10 +281,9 @@ function noteFrom(raw: unknown): string | null {
 function applyCancel(tx: Tx, c: CancelEffect, by: Actor): void {
   const at = nowIso()
   if (c.cancelFrom === null) {
-    if (c.row.cancelFrom !== null) tx.update(requests).set({ cancelFrom: null }).where(eq(requests.id, c.row.id)).run()
-    const live: Live = { tx, row: c.row }
+    // A whole cancel records who and when and no cancel day (D-020), in the one statement that moves the state.
+    const live: Live = { tx, row: c.row, also: { cancelFrom: null, cancelledAt: at, cancelledBy: by.id } }
     transition(live, 'approved', 'cancelled')
-    tx.update(requests).set({ cancelledAt: at, cancelledBy: by.id }).where(eq(requests.id, c.row.id)).run()
     return
   }
   // REQ-019: stays approved; the days in effect end the day before the cancel day; who and when are recorded.
@@ -319,13 +329,10 @@ function decide(action: 'approve' | 'reject', by: Actor, idParam: string | undef
     const row = requestRow(tx, id)
     const plan = requestPlan(action, row, nameOfAccount(row.accountId), todayInTeamZone())
     if (!tokenMatches(tokenFrom(body), plan.effect)) refuse(409, STALE)
-    const live: Live = { tx, row }
+    const live: Live = { tx, row, also: { decidedAt: nowIso(), decidedBy: by.id, rejectionNote: note } }
     if (action === 'approve') transition(live, 'pending', 'approved')
     else transition(live, 'pending', 'rejected')
-    tx.update(requests)
-      .set({ decidedAt: nowIso(), decidedBy: by.id, rejectionNote: note })
-      .where(eq(requests.id, id))
-      .run()
+    faultPoint(action) // ROW-199, D-049: the fault door's step, after the first write.
     return { ok: true, id, state: action === 'approve' ? 'approved' : 'rejected' }
   })
 }
@@ -341,6 +348,7 @@ export function adminCancel(by: Actor, idParam: string | undefined, body: unknow
     if (!tokenMatches(tokenFrom(body), plan.effect)) refuse(409, STALE)
     const c = cancelEffectOf(row, today)
     applyCancel(tx, c, by)
+    if (c.cancelFrom !== null) faultPoint('partial-cancel') // ROW-199, D-049
     return { ok: true, id, state: c.cancelFrom === null ? 'cancelled' : 'approved' }
   })
 }
@@ -357,12 +365,12 @@ export function switchOffAccount(by: Actor, id: number, body: unknown): { ok: tr
     if (!tokenMatches(tokenFrom(body), plan.effect)) refuse(409, STALE)
     const at = nowIso()
     for (const row of plan.pending) {
-      const live: Live = { tx, row }
+      const live: Live = { tx, row, also: { cancelledAt: at, cancelledBy: by.id } }
       transition(live, 'pending', 'cancelled')
-      tx.update(requests).set({ cancelledAt: at, cancelledBy: by.id }).where(eq(requests.id, row.id)).run()
     }
     for (const c of plan.cancels) applyCancel(tx, c, by)
     switchOffIn(tx, by, plan.target.id)
+    faultPoint('switch-off') // ROW-199, D-049: after its writes, before the transaction commits.
     return { ok: true, id: plan.target.id }
   })
 }
