@@ -1,5 +1,5 @@
-// Purpose: ledger test for ROW-159 (REQ-007, REQ-008, REQ-020, REQ-002) — every days-left, pending or forecast figure is labelled with its year and says which it is: on the person's own page, the pending page, the people page and in the refusal message.
-// Provenance: hand-authored (test-author pass, slice 0, batch test-author-11); fixture data made through the product's public routes by harness.ts (reset, account, allowance, requests, approvals), fresh per run; pages opened through harness.ts's engine door.
+// Purpose: ledger test for ROW-159 (REQ-007, REQ-008, REQ-020, REQ-002, REQ-021, REQ-025, REQ-022) — every days-left, pending or forecast figure is labelled with its year and says which it is: on the person's own page, the pending page, the people page, the admin's person page, the approve confirmation and in the refusal message.
+// Provenance: hand-authored (test-author pass, slice 0, batch test-author-11; the A-055 case added by batch test-author-26); fixture data made through the product's public routes by harness.ts (reset, account, allowance, requests, approvals), fresh per run; pages opened through harness.ts's engine door.
 //
 // Boundary (R6): a figure's label is paint, so the pages are read in the browser (D-029 pages /, /admin/pending,
 // /admin/people); the refusal message is read at the HTTP harness (POST /api/requests' refusal body).
@@ -37,6 +37,7 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   approve,
   createMember,
+  freshName,
   openPage,
   PAGES,
   readBalance,
@@ -48,6 +49,7 @@ import {
   type Actor,
 } from './harness';
 import { aucklandMorning, balanceYear } from './readings';
+import { openConfirmation } from './admin-kit';
 
 const disposables: { dispose(): Promise<void> }[] = [];
 const closers: { close(): Promise<void> }[] = [];
@@ -67,10 +69,10 @@ interface Figure {
   which: Which;
 }
 
-async function setup(): Promise<{ admin: Actor; session: Actor }> {
-  const install = await resetProduct({ now: aucklandMorning('2027-03-08') });
+async function setup(names: { admin?: string; member?: string } = {}): Promise<{ admin: Actor; session: Actor }> {
+  const install = await resetProduct({ now: aucklandMorning('2027-03-08'), admin: names.admin === undefined ? undefined : { name: names.admin } });
   const admin = keep(await signIn(install.admin));
-  const m = await createMember(admin, { allowance: 47 });
+  const m = await createMember(admin, { allowance: 47, ...(names.member === undefined ? {} : { name: names.member }) });
   await setAllowance(admin, m.id, 56, { startsNextYear: true });
   const session = keep(await signInMember(m));
   await approve(admin, await sendRequest(session, { kind: 'vacation', firstDay: '2027-03-15', lastDay: '2027-03-25' }));
@@ -83,8 +85,16 @@ async function setup(): Promise<{ admin: Actor; session: Actor }> {
 }
 
 /** For each figure: whether it is drawn, and whether some drawing of it carries a label naming its year and its word. */
-async function labelsOn(page: Page, figures: Figure[]): Promise<{ figure: Figure; drawn: boolean; labelled: boolean; seen: string[] }[]> {
-  return page.evaluate((figs) => {
+async function labelsOn(
+  page: Page,
+  figures: Figure[],
+  opts: { renderedOnly?: boolean } = {},
+): Promise<{ figure: Figure; drawn: boolean; labelled: boolean; seen: string[] }[]> {
+  return page.evaluate(({ figs, renderedOnly }) => {
+    // renderedOnly: count only elements the page draws — never a script's, style's or template's text (a page's data
+    // payload), nor an element with no box.
+    const rendered = (el: Element) =>
+      !el.closest('script, style, noscript, template') && (el as HTMLElement).getClientRects().length > 0;
     const words: Record<string, RegExp> = {
       left: /\bleft\b|remaining/i,
       pending: /pending/i,
@@ -159,7 +169,7 @@ async function labelsOn(page: Page, figures: Figure[]): Promise<{ figure: Figure
       return best;
     };
     return figs.map((f) => {
-      const els = Array.from(document.body.querySelectorAll('*')).filter((el) => numberRe(f.value).test(ownText(el)));
+      const els = Array.from(document.body.querySelectorAll('*')).filter((el) => numberRe(f.value).test(ownText(el)) && (!renderedOnly || rendered(el)));
       const seen: string[] = [];
       let labelled = false;
       for (const el of els) {
@@ -173,7 +183,7 @@ async function labelsOn(page: Page, figures: Figure[]): Promise<{ figure: Figure
       }
       return { figure: f, drawn: els.length > 0, labelled, seen };
     });
-  }, figures);
+  }, { figs: figures, renderedOnly: opts.renderedOnly === true });
 }
 
 async function checkPage(page: Page, path: string, figures: Figure[], row: string): Promise<void> {
@@ -249,4 +259,161 @@ test('ROW-159.REQ-007.every-balance-figure-names-its-year-and-what-it-is', async
   expect.soft(/\b2027\b/.test(body), `ROW-159 refusal: the message names 2027 (body: ${body.slice(0, 300)})`).toBe(true);
   expect.soft(/(^|[^0-9])38([^0-9]|$)/.test(body) && /\bleft\b|remaining/i.test(body), `ROW-159 refusal: the message says 38 days left (body: ${body.slice(0, 300)})`).toBe(true);
   expect.soft(/(^|[^0-9])11([^0-9]|$)/.test(body) && /pending/i.test(body), `ROW-159 refusal: the message says 11 pending (body: ${body.slice(0, 300)})`).toBe(true);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-159 (amended, A-055) promise: the row as amended — every days-left, pending or forecast figure on every page
+// ROW-159   and confirmation, the admin's person page and the approve confirmation included (A-055: "yes, as
+// ROW-159   recommended"), is labelled with its year and says which it is; REQ-021 (the person's requests page lists the
+// ROW-159   requests as the person's own page does), REQ-025 (the approve confirmation names what will change), REQ-022
+// ROW-159   (the forecast is labelled as such); INV-001 (the forecast is not the days left).
+// ROW-159 wrong product: a person page drawing the person's balance as "38 · 11" and "54 · 13" with no year (the
+// ROW-159   own page's labels left behind when the component was reused); an approve confirmation saying "Approve? 32
+// ROW-159   days left" — no year, and a forecast called days left — or "Leaves 47." for a 2028 request with no year.
+// ROW-159 given: the setup above (today Mon 2027-03-08; 2027: 38 left, 11 pending; 2028: 54 left, 13 pending; the
+// ROW-159   pending 2027 vacation 19..26 Apr of 6 days, forecast 32; the pending 2028 vacation 17..25 Jan of 7 days,
+// ROW-159   forecast 47). when: the admin opens /admin/people/:id for the member; then, on /admin/pending, presses Approve
+// ROW-159   on the 19..26 Apr request and reads its confirmation, declines it, and does the same for the 17..25 Jan 2028
+// ROW-159   request. then: on the person page 38 and 54 are drawn, each labelled with its year and as days left, and 11
+// ROW-159   and 13, wherever drawn, with their year and as pending; in each confirmation every one of that request's
+// ROW-159   year's figures it shows (days left, pending, forecast) carries its year and its word.
+// ROW-159 controls: ROW-159.control.the-setup-figures-exist (the figures exist, through GET /api/balance); in the
+// ROW-159   target, the confirmation opening at all (openConfirmation fails the case when no confirmation opens) and the
+// ROW-159   person page answering 200 with the person's name.
+// ROW-159 technique: distinctive figure values (no date, count or allowance on these surfaces draws them), the page
+// ROW-159   label rule stated above (on the person page counting only rendered elements, never the page's data payload), and for a confirmation's text the same rule on text: the label is the whole
+// ROW-159   confirmation when it names one year only, else the clause holding the figure, whose nearest year must be the
+// ROW-159   figure's. A confirmation that shows no figure has nothing to label; a figure it shows must be labelled.
+// ROW-159 cases: ROW-159 target=ROW-159.REQ-021.person-page-and-approve-confirmation-figures-name-their-year control=ROW-159.control.the-setup-figures-exist
+
+/** For each figure: whether the confirmation's text draws it, and whether a drawing of it carries its year and its word (the rule above). */
+function confirmationLabels(text: string, figures: Figure[]): { figure: Figure; drawn: boolean; labelled: boolean; seen: string[] }[] {
+  const words: Record<Which, RegExp> = {
+    left: /\bleft\b|remaining/i,
+    pending: /pending/i,
+    forecast: /would|\bwill\b|\bafter\b|if approved|\bleaves\b|forecast/i,
+  };
+  const yearsIn = (t: string) => Array.from(new Set((t.match(/\b20\d\d\b/g) ?? []).map(Number)));
+  const flat = text.replace(/[ \t]+/g, ' ');
+  const whole = yearsIn(flat);
+  const clauses = flat.split(/\n|;|\||•|·|\.\s+(?=[A-Z])/);
+  return figures.map((f) => {
+    const re = new RegExp(`(^|[^0-9])${f.value}([^0-9]|$)`, 'g');
+    const seen: string[] = [];
+    let drawn = false;
+    let labelled = false;
+    for (const clause of clauses) {
+      for (const m of clause.matchAll(re)) {
+        drawn = true;
+        const start = (m.index ?? 0) + m[1].length;
+        let yearOk: boolean;
+        let label: string;
+        if (whole.length === 1) {
+          label = flat;
+          yearOk = whole[0] === f.year;
+        } else {
+          label = clause;
+          let best: number | null = null;
+          let gap = Infinity;
+          for (const y of clause.matchAll(/\b20\d\d\b/g)) {
+            const ys = y.index ?? 0;
+            const g = ys + 4 <= start ? start - (ys + 4) : ys - (start + String(f.value).length);
+            if (Math.abs(g) < gap) {
+              gap = Math.abs(g);
+              best = Number(y[0]);
+            }
+          }
+          yearOk = best === f.year;
+        }
+        seen.push(label.trim().slice(0, 200));
+        if (yearOk && words[f.which].test(label)) labelled = true;
+      }
+    }
+    return { figure: f, drawn, labelled, seen };
+  });
+}
+
+test('ROW-159.REQ-021.person-page-and-approve-confirmation-figures-name-their-year', async ({ browser }) => {
+  test.setTimeout(300_000);
+  // Names without digits, so no name drawn on a page or in a confirmation reads as a figure.
+  const letters = (n: string) => n.replace(/[0-9]/g, (d) => 'abcdefghij'[Number(d)]);
+  const { admin, session } = await setup({ admin: letters(freshName('Admin')), member: letters(freshName('Member')) });
+  const name = session.me.name;
+  const adm = await openPage(browser, admin);
+  closers.push(adm);
+  const page = adm.page;
+
+  // The admin's person page: days left drawn and labelled; pending, wherever drawn, labelled.
+  const res = await page.goto(PAGES.adminPerson(session.me.id));
+  expect(res?.status(), "ROW-159 person page: /admin/people/:id answers the admin").toBe(200);
+  await page.waitForLoadState('networkidle').catch(() => undefined);
+  await expect(page.getByText(name).first(), "ROW-159 person page: it is the member's page").toBeVisible();
+  const personFigures: Figure[] = [
+    { value: 38, year: 2027, which: 'left' },
+    { value: 11, year: 2027, which: 'pending' },
+    { value: 54, year: 2028, which: 'left' },
+    { value: 13, year: 2028, which: 'pending' },
+  ];
+  await expect
+    .poll(async () => (await labelsOn(page, personFigures, { renderedOnly: true })).filter((r) => r.figure.which === 'left').every((r) => r.drawn), { timeout: 10_000 })
+    .toBe(true)
+    .catch(() => undefined);
+  for (const r of await labelsOn(page, personFigures, { renderedOnly: true })) {
+    const f = r.figure;
+    if (f.which === 'left') expect.soft(r.drawn, `ROW-159 person page draws the ${f.year} days-left figure ${f.value}`).toBe(true);
+    if (r.drawn) {
+      expect
+        .soft(r.labelled, `ROW-159 person page: ${f.value} is labelled with ${f.year} and says ${f.which} (labels seen: ${r.seen.join(' ‖ ')})`)
+        .toBe(true);
+    }
+  }
+
+  // The approve confirmation, for a 2027 request and for a 2028 request; each declined (dismissed or left by reloading).
+  page.on('dialog', (d) => void d.dismiss().catch(() => undefined));
+  const dayRe = (d: number) => new RegExp(`(^|[^0-9])0?${d}([^0-9]|$)`);
+  const approveControl = (days: [number, number]) => {
+    const verb = /approve/i;
+    const control = page.getByRole('button', { name: verb }).or(page.getByRole('link', { name: verb }));
+    const item = page
+      .locator('li, tr, article, section, form, fieldset, div, [role="row"], [role="listitem"]')
+      .filter({ hasText: name })
+      .filter({ hasText: dayRe(days[0]) })
+      .filter({ hasText: dayRe(days[1]) })
+      .filter({ has: control })
+      .last();
+    return item.getByRole('button', { name: verb }).or(item.getByRole('link', { name: verb })).first();
+  };
+  const confirmations: [string, [number, number], Figure[]][] = [
+    [
+      'the 19..26 Apr 2027 request',
+      [19, 26],
+      [
+        { value: 38, year: 2027, which: 'left' },
+        { value: 11, year: 2027, which: 'pending' },
+        { value: 32, year: 2027, which: 'forecast' },
+      ],
+    ],
+    [
+      'the 17..25 Jan 2028 request',
+      [17, 25],
+      [
+        { value: 54, year: 2028, which: 'left' },
+        { value: 13, year: 2028, which: 'pending' },
+        { value: 47, year: 2028, which: 'forecast' },
+      ],
+    ],
+  ];
+  for (const [what, days, figures] of confirmations) {
+    const pending = await page.goto(PAGES.adminPending);
+    expect(pending?.status(), 'ROW-159 approve confirmation: /admin/pending answers the admin').toBe(200);
+    await page.waitForLoadState('networkidle').catch(() => undefined);
+    const shown = await openConfirmation(page, approveControl(days), /approve/i, `ROW-159 approve confirmation for ${what}`);
+    for (const r of confirmationLabels(shown.text.split(name).join(' '), figures)) {
+      const f = r.figure;
+      if (!r.drawn) continue;
+      expect
+        .soft(r.labelled, `ROW-159 approve confirmation for ${what}: ${f.value} is labelled with ${f.year} and says ${f.which} (it shows: ${JSON.stringify(shown.text.slice(0, 400))})`)
+        .toBe(true);
+    }
+  }
 });

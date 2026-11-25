@@ -1,5 +1,5 @@
-// Purpose: ledger tests for ROW-215 (REQ-013, REQ-014) and ROW-216 (REQ-020) — an email is trimmed and compared without regard to letter case at creation and at sign-in; creating or renaming an account with an empty or blank name is refused.
-// Provenance: hand-authored (test-author pass, slice 0, batch test-author-13); fixture data made through the product's public routes by harness.ts (reset, accounts, rename, sign-in), fresh per run.
+// Purpose: ledger tests for ROW-215 (REQ-013, REQ-014) and ROW-216 (REQ-013, REQ-020, REQ-023) — an email is trimmed and compared without regard to letter case at creation and at sign-in; creating or renaming an account with an empty or blank name (only spaces and invisible characters, A-056) is refused.
+// Provenance: hand-authored (test-author pass, slice 0, batch test-author-13; the A-056 case added by batch test-author-26); fixture data made through the product's public routes by harness.ts (reset, accounts, rename, sign-in), fresh per run.
 //
 // Boundary (R6): rules, proved at the HTTP harness — POST /api/admin/accounts, POST /api/admin/accounts/:id/name and
 // POST /api/auth/sign-in (D-029). "Signed in" is judged by the session (GET /api/me on the same jar), not the status.
@@ -121,6 +121,71 @@ test('ROW-216.REQ-020.blank-names-are-refused-at-create-and-rename', async () =>
   }
   const people = (await peopleText(admin)).toLowerCase();
   expect.soft(emails.filter((e) => people.includes(e)), 'ROW-216: no account was created with a blank name').toEqual([]);
+  const session = keep(await signIn({ email: m.email, password: m.password }));
+  expect.soft(session.me.name, "ROW-216: M's name is unchanged").toBe(m.name);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-216 (amended, A-056) promise: the row as amended — creating or renaming an account with a name made only of
+// ROW-216   spaces and invisible characters, in any mix (a zero-width space or a word joiner, for example), is refused;
+// ROW-216   A-056 ("yes, refuse it"); REQ-013 (an account is never created without a name), REQ-020 (create and change a
+// ROW-216   name from the people page), REQ-023 (an account holds its display name).
+// ROW-216 wrong product: a blank check of name.trim() === '' — JavaScript's trim removes spaces, no-break and
+// ROW-216   ideographic spaces and U+FEFF, but not U+200B (zero-width space), U+200C/U+200D (zero-width non-joiner and
+// ROW-216   joiner), U+2060 (word joiner), U+00AD (soft hyphen) or U+180E (Mongolian vowel separator), so a name of one
+// ROW-216   of those passes and the calendar shows an entry with no visible name; or a create that strips them while
+// ROW-216   rename does not; or a product that, to refuse them, refuses every name with a character outside ASCII.
+// ROW-216 given: member M with a fresh name N. when: the admin creates accounts (each with a fresh email) named by
+// ROW-216   each invisible character alone, several together, and each mixed with spaces, tabs and no-break spaces; and
+// ROW-216   renames M to each of those names. then: each create and each rename is refused (a rule's 4xx); no account
+// ROW-216   with those emails exists; M signs in still named N. Before them, a create and a rename with real names that
+// ROW-216   are not ASCII ("Zoë Øster…", "Łucja Ñúñez…") take effect, so a refusal is the blankness's.
+// ROW-216 controls: ROW-216.control.a-real-name-creates-and-renames (the routes and bodies work); in the target, the
+// ROW-216   real non-ASCII names created and renamed first (SETUP when refused) — a product that refuses every name
+// ROW-216   outside ASCII cannot pass by refusing everything.
+// ROW-216 technique: the boundary of blank widened to the invisible characters, one by one and mixed, beside real
+// ROW-216   names that carry non-ASCII letters; the neighbouring record (M's name) must stay untouched.
+// ROW-216 cases: ROW-216 target=ROW-216.REQ-013.names-of-only-spaces-and-invisible-characters-are-refused control=ROW-216.control.a-real-name-creates-and-renames
+const INVISIBLES = ['​', '‌', '‍', '⁠', '﻿', '­', '᠎'];
+const INVISIBLE_BLANKS = [
+  ...INVISIBLES,
+  '​⁠',
+  '​‌‍⁠﻿',
+  ' ​ ',
+  '⁠ ⁠',
+  '\t​\n',
+  ' ​　',
+  ' ­ ᠎ ',
+];
+
+test('ROW-216.REQ-013.names-of-only-spaces-and-invisible-characters-are-refused', async () => {
+  const { admin } = await freshTeam();
+  const m = await createMember(admin);
+
+  // The real names first: non-ASCII letters are a name, so the refusals below are the blankness's.
+  const realEmail = freshEmail('real');
+  const realName = freshName('Zoë Øster');
+  const created = await admin.api.post('/api/admin/accounts', { data: { name: realName, email: realEmail, password: freshPassword(), allowance: 10 } });
+  if (created.status() >= 300) throw new Error(`SETUP: a create with the real name ${JSON.stringify(realName)} answered ${created.status()}`);
+  const realId = ((await created.json().catch(() => ({}))) as { id?: unknown }).id;
+  const renamedTo = freshName('Łucja Ñúñez');
+  const renamed = await admin.api.post(`/api/admin/accounts/${encodeURIComponent(String(realId))}/name`, { data: { name: renamedTo } });
+  if (renamed.status() >= 300) throw new Error(`SETUP: a rename to the real name ${JSON.stringify(renamedTo)} answered ${renamed.status()}`);
+
+  const emails: string[] = [];
+  const label = (b: string) => Array.from(b).map((c) => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`).join(' ');
+  for (const b of INVISIBLE_BLANKS) {
+    const email = freshEmail('invisible');
+    emails.push(email);
+    const status = await tryCreate(admin, { name: b, email, password: freshPassword(), allowance: 10 });
+    expect.soft(isRuleRefusal(status), `ROW-216 create with a name of only ${label(b)} is refused (answered ${status})`).toBe(true);
+  }
+  for (const b of INVISIBLE_BLANKS) {
+    const res = await admin.api.post(`/api/admin/accounts/${encodeURIComponent(String(m.id))}/name`, { data: { name: b } });
+    expect.soft(isRuleRefusal(res.status()), `ROW-216 rename to a name of only ${label(b)} is refused (answered ${res.status()})`).toBe(true);
+  }
+  const people = (await peopleText(admin)).toLowerCase();
+  expect.soft(emails.filter((e) => people.includes(e)), 'ROW-216: no account was created with a name of only spaces and invisible characters').toEqual([]);
   const session = keep(await signIn({ email: m.email, password: m.password }));
   expect.soft(session.me.name, "ROW-216: M's name is unchanged").toBe(m.name);
 });

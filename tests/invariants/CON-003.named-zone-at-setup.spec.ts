@@ -1,5 +1,5 @@
-// Purpose: ledger tests for ROW-136 (CON-003, REQ-004) — setup cannot finish without an explicitly chosen named time zone (never a fixed offset or a silent default), shows the chosen zone afterwards, and a runtime without time-zone data refuses to start.
-// Provenance: hand-authored (test-author pass, slice 1, batch test-author-16); the setup command run through the D-048 setup door and the restart and logs doors (doors-process.ts), the team made through harness.ts and team-calendar.ts, fresh per run; instants worked out by the tests' own Intl oracle.
+// Purpose: ledger tests for ROW-136 (CON-003, REQ-004) — setup cannot finish without an explicitly chosen named time zone (never a fixed offset or a silent default; every fixed-offset name refused by name, a geographic zone without daylight saving accepted, A-054), shows the chosen zone afterwards, and a runtime without time-zone data refuses to start.
+// Provenance: hand-authored (test-author pass, slice 1, batch test-author-16; the A-054 cases added by batch test-author-26); the setup command run through the D-048 setup door and the restart and logs doors (doors-process.ts), the team made through harness.ts and team-calendar.ts, fresh per run; instants worked out by the tests' own Intl oracle.
 //
 // Boundary (R6): a machine command and a process start — the setup command's own entry point (its arguments, exit
 // and output, through the setup door) and the server's own start (the restart door's start without time-zone data,
@@ -110,5 +110,73 @@ test('ROW-136.CON-003.runtime-without-tz-data-refuses-to-start', async () => {
   } finally {
     await admin?.dispose();
     await restartProduct();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-136 (amended, A-054) promise: the row as amended — setup refuses by name every fixed-offset zone spelling: an
+// ROW-136   offset spelling (GMT+0 and GMT-0 included), the Etc/ zones, the UTC and GMT aliases UTC, UCT, GMT, GMT0,
+// ROW-136   Greenwich, Universal and Zulu, and the legacy fixed names EST, MST and HST; and it accepts a named geographic
+// ROW-136   zone whether or not it observes daylight saving, America/Guatemala and America/Costa_Rica included (A-054:
+// ROW-136   "the team's zone is UTC-6 in Central America, entered by its named zone"); CON-003, D-013.
+// ROW-136 wrong product: (a) a check that asks Intl whether the zone exists — Intl takes "Etc/GMT+6", "UTC", "Zulu",
+// ROW-136   "GMT0" and "EST" (in current zone data EST is a link to America/Panama), so each finishes setup as if named;
+// ROW-136   (b) a deny list compared exactly, so "utc" or "etc/gmt+6" (which Intl takes, case-insensitively) slips past;
+// ROW-136   (c) a behavioural fixed-offset test ("refuse a zone whose offset never changes in the year"), which refuses
+// ROW-136   the owner's own America/Guatemala and America/Costa_Rica (F-139).
+// ROW-136 given: a fresh database per run and fresh admin values per call. when: setup with each fixed-offset
+// ROW-136   spelling (the row's list, UTC-6's own offset spellings, and lower-case forms of two names); then setup with
+// ROW-136   America/Guatemala and with America/Costa_Rica. then: every fixed spelling ends with a non-zero exit; each
+// ROW-136   Central American zone finishes (exit 0) and its output names that zone.
+// ROW-136 controls: ROW-136.control.setup-with-a-daylight-saving-zone-finishes — setup with America/Chicago (UTC-6 in
+// ROW-136   winter, with daylight saving) finishes and names it, so the arguments are the command's and a refusal in a
+// ROW-136   target is the zone's; the refusal case re-runs that finish as its own precondition (SETUP when it fails).
+// ROW-136 technique: near misses either side of the line — Etc/GMT+6, GMT-6 and UTC-06:00 (the team's offset by a
+// ROW-136   fixed name) against America/Guatemala and America/Costa_Rica (the team's offset by a geographic name), and
+// ROW-136   America/Chicago (the same offset with daylight saving) as the control.
+// ROW-136 cases: ROW-136 target=ROW-136.CON-003.setup-refuses-every-fixed-offset-zone-by-name control=ROW-136.control.setup-with-a-daylight-saving-zone-finishes
+// ROW-136 cases: ROW-136 target=ROW-136.CON-003.setup-accepts-named-zones-without-daylight-saving control=ROW-136.control.setup-with-a-daylight-saving-zone-finishes
+const DAYLIGHT_SAVING_ZONE = 'America/Chicago';
+const NO_DAYLIGHT_SAVING_ZONES = ['America/Guatemala', 'America/Costa_Rica'];
+const FIXED_OFFSET_NAMES = [
+  // offset spellings
+  'GMT+0', 'GMT-0', 'UTC-6', 'GMT-6', 'UTC-06:00', '-06:00',
+  // the Etc/ zones
+  'Etc/GMT+6', 'Etc/GMT-14', 'Etc/GMT+0', 'Etc/GMT-0', 'Etc/GMT0', 'Etc/GMT', 'Etc/UTC', 'Etc/UCT', 'Etc/Universal', 'Etc/Zulu', 'Etc/Greenwich',
+  // the UTC and GMT aliases
+  'UTC', 'UCT', 'GMT', 'GMT0', 'Greenwich', 'Universal', 'Zulu',
+  // the legacy fixed names
+  'EST', 'MST', 'HST',
+  // the same names in another letter case (Intl takes zone names case-insensitively)
+  'utc', 'etc/gmt+6',
+];
+
+test('ROW-136.control.setup-with-a-daylight-saving-zone-finishes', async () => {
+  const run = await runSetup(setupArgs(freshSpec(DAYLIGHT_SAVING_ZONE)), 'fresh');
+  expect(run.exit, `ROW-136 control: setup with every argument and ${DAYLIGHT_SAVING_ZONE} finishes (stderr: ${run.stderr.slice(0, 300)})`).toBe(0);
+  expect(run.stdout, `ROW-136 control: the output shown to the admin names the chosen zone ${DAYLIGHT_SAVING_ZONE}`).toContain(DAYLIGHT_SAVING_ZONE);
+});
+
+test('ROW-136.CON-003.setup-refuses-every-fixed-offset-zone-by-name', async () => {
+  test.setTimeout(600_000);
+  const pre = await runSetup(setupArgs(freshSpec(DAYLIGHT_SAVING_ZONE)), 'fresh');
+  if (pre.exit !== 0) {
+    throw new Error(`SETUP: the setup command did not finish with every argument and ${DAYLIGHT_SAVING_ZONE} (exit ${pre.exit}): ${pre.stderr.slice(0, 300)}`);
+  }
+  const finished: string[] = [];
+  for (const name of FIXED_OFFSET_NAMES) {
+    const run = await runSetup(setupArgs(freshSpec(name)), 'fresh');
+    if (run.exit === 0) finished.push(name);
+    expect.soft(run.exit, `ROW-136 setup with the fixed-offset name ${JSON.stringify(name)} does not finish (stdout: ${run.stdout.slice(0, 200)})`).not.toBe(0);
+    expect.soft(run.exit, `ROW-136 setup with ${JSON.stringify(name)} ends with an exit code`).not.toBeNull();
+  }
+  expect(finished, 'ROW-136: no fixed-offset zone name finished setup').toEqual([]);
+});
+
+test('ROW-136.CON-003.setup-accepts-named-zones-without-daylight-saving', async () => {
+  for (const zone of NO_DAYLIGHT_SAVING_ZONES) {
+    const run = await runSetup(setupArgs(freshSpec(zone)), 'fresh');
+    expect.soft(run.exit, `ROW-136 setup with ${zone} (no daylight saving) finishes (stderr: ${run.stderr.slice(0, 300)})`).toBe(0);
+    expect.soft(run.stdout, `ROW-136 the output shown to the admin names the chosen zone ${zone}`).toContain(zone);
   }
 });
