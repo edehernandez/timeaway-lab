@@ -41,7 +41,7 @@ async function submit() {
 
 <template>
   <section>
-    <h1>Ask for time off</h1>
+    <h1>Send a request</h1>
     <form @submit.prevent="submit">
       <fieldset>
         <legend>Kind</legend>

@@ -21,7 +21,7 @@ async function signOut() {
     <!-- D-046, ROW-117: plain links, so a page's address and its drawn content change together (a full load). -->
     <nav v-if="!me.mustChangePassword" aria-label="Pages">
       <a href="/">My requests</a>
-      <a href="/requests/new">Ask for time off</a>
+      <a href="/requests/new">Send a request</a>
       <a href="/calendar">Calendar</a>
       <a href="/password">Password</a>
       <template v-if="me.isAdmin">
