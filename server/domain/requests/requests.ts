@@ -117,6 +117,23 @@ export function forecastFor(accountId: number, year: number, askedDays: number):
   return { daysLeft, forecast: daysLeft - askedDays }
 }
 
+/** One year of a person on the admin's people data: that year's allowance (D-025) beside balanceFor's figures. */
+export interface PersonYear extends YearFigures {
+  allowance: number | null
+}
+
+/**
+ * REQ-020, REQ-023 (ROW-109, ROW-110), RULE-001: the admin's people list, each account with the allowance in force and
+ * the figures of balanceFor for the current and the next year. Only the admin's people route calls it (RULE-003).
+ */
+export function peopleWithYears(): (ReturnType<typeof listPeople>[number] & { years: PersonYear[] })[] {
+  const year = Number(todayInTeamZone().slice(0, 4))
+  return listPeople().map((p) => ({
+    ...p,
+    years: [year, year + 1].map((y) => ({ ...balanceFor(p.id, y), allowance: allowanceFor(p.id, y) })),
+  }))
+}
+
 /** RULE-002: the signed-in person's own figures, as GET /api/balance answers them (D-029 {years:[{year,daysLeft,pending}]}). */
 export function balanceForViewer(_viewer: Actor, figures: YearFigures[]): { years: YearFigures[] } {
   return { years: figures.map((f) => ({ year: f.year, daysLeft: f.daysLeft, pending: f.pending })) }

@@ -80,6 +80,10 @@ export const accountEvents = sqliteTable(
     what: text('what').notNull(),
     fromValue: text('from_value'),
     toValue: text('to_value'),
+    // REQ-018 arm 4, D-043: the calendar year an allowance change starts from. An allowance change ('allowance set')
+    // carries it, with its old value (the allowance that year had before) and its new value as whole numbers of days
+    // in from_value and to_value; no other change carries a year.
+    startsYear: integer('starts_year'),
   },
   (t) => [index('account_events_account').on(t.accountId)],
 )
