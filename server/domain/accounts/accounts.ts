@@ -72,8 +72,26 @@ export function normaliseEmail(raw: string): string {
   return raw.trim().toLowerCase()
 }
 
+// REQ-024, ROW-216, ROW-254, ROW-255, A-056, A-058 (D-055): the one name normalization. White space is the Unicode
+// White_Space property (the no-break and ideographic spaces and U+0085 included, which String.trim partly misses);
+// what displays as nothing is the Unicode Default_Ignorable_Code_Point property (U+00AD, U+180E, U+200B to U+200F,
+// U+2060 to U+206F, U+FEFF, the variation selectors and the rest of the property).
+const EDGE_BLANKS = /^[\p{White_Space}\p{Default_Ignorable_Code_Point}]+|[\p{White_Space}\p{Default_Ignorable_Code_Point}]+$/gu
+const DISPLAYS_AS_NOTHING = /\p{Default_Ignorable_Code_Point}/gu
+
+/** REQ-024, ROW-216: a name as kept — as typed, less the white space and the invisible characters at its edges, in any mix. */
+function trimmedName(raw: string): string {
+  return raw.replace(EDGE_BLANKS, '')
+}
+
+/**
+ * REQ-024, ROW-254, ROW-255, A-058 (D-055): the key two display names are compared by — NFC, the invisible characters
+ * dropped wherever they sit, the surrounding white space trimmed, and letter case folded (upper then lower, so "ß"
+ * and "SS" meet), NFC again after the folding. Empty means the name is blank (ROW-216, A-056).
+ */
 function nameKeyOf(name: string): string {
-  return name.trim().toLowerCase()
+  const visible = name.normalize('NFC').replace(DISPLAYS_AS_NOTHING, '').replace(EDGE_BLANKS, '')
+  return visible.toUpperCase().toLowerCase().normalize('NFC')
 }
 
 /** The fields of a JSON body, or none when the body is not an object. */
@@ -83,8 +101,9 @@ export function fieldsOf(body: unknown): Record<string, unknown> {
 
 function nameFrom(raw: unknown): string {
   if (typeof raw !== 'string') refuse(400, 'A name is needed.')
-  const name = raw.trim()
-  if (name === '') refuse(400, 'A name cannot be blank.')
+  const name = trimmedName(raw)
+  // ROW-216, A-056: a name of only white space and characters that display as nothing, in any mix, is blank.
+  if (name === '' || nameKeyOf(name) === '') refuse(400, 'A name cannot be blank.')
   if ([...name].length > 60) refuse(400, 'A name can be at most 60 characters.')
   return name
 }
@@ -138,9 +157,14 @@ function emailHolder(tx: Tx, email: string, except?: number): AccountRow | undef
   return tx.select().from(accounts).where(cond).get()
 }
 
+/**
+ * REQ-024 (D-055): the switched-on account other than `except` whose name has `nameKey` — each name's key worked out
+ * again by nameKeyOf (at most 30 are switched on), so a key stored before the comparison widened cannot hide a holder;
+ * the store's partial unique index on name_key stays the backstop.
+ */
 function switchedOnNameHolder(tx: Tx, nameKey: string, except?: number): AccountRow | undefined {
-  const base = and(eq(accounts.nameKey, nameKey), eq(accounts.switchedOn, 1))
-  return tx.select().from(accounts).where(except === undefined ? base : and(base, ne(accounts.id, except))).get()
+  const on = tx.select().from(accounts).where(eq(accounts.switchedOn, 1)).all()
+  return on.find((a) => a.id !== except && (a.nameKey === nameKey || nameKeyOf(a.name) === nameKey))
 }
 
 /** An account's allowance changes (D-025), oldest first. */
@@ -467,8 +491,9 @@ export function switchAccount(by: Actor, id: number, body: unknown): { ok: true 
     if (!target) refuse(404, 'There is no such account.')
     if (target.switchedOn === 1) refuse(409, `${target.name}'s account is already switched on.`)
     if (switchedOnCount(tx) >= MAX_SWITCHED_ON) refuse(409, `${MAX_SWITCHED_ON} accounts are already switched on; switch one off first.`)
-    if (switchedOnNameHolder(tx, target.nameKey, id)) refuse(409, 'A switched-on account already has this name. Rename one of them first.')
-    tx.update(accounts).set({ switchedOn: 1 }).where(eq(accounts.id, id)).run()
+    const nameKey = nameKeyOf(target.name)
+    if (switchedOnNameHolder(tx, nameKey, id)) refuse(409, 'A switched-on account already has this name. Rename one of them first.')
+    tx.update(accounts).set({ switchedOn: 1, nameKey }).where(eq(accounts.id, id)).run()
     record(tx, id, by.id, 'switched on')
   }, 'A switched-on account already has this name.')
   return { ok: true }

@@ -31,7 +31,6 @@ export { nowIso, nowMs, setInjectedNow, testControlEnabled } from './clock'
 export { armFault, faultPoint, type FaultAction } from './faults'
 export { logsDoor, productionStartDoor, restartDoor, setupDoor, storeDoor } from './test-doors'
 export {
-  fromOwnOrigin,
   isFormPost,
   requireAdmin,
   requireSession,
