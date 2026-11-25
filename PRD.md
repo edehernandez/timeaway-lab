@@ -515,3 +515,12 @@ F-133 | review | advisory | A-050 | repaired | evidence: round 1 — the heading
 ```
 
 review: delta, round 2, 3 findings
+
+### 2026-11-25 (sign-in answers and session renewal rulings)
+
+```vid-prd-answers
+A-051 | human | 2026-11-25 | Q: must a switched-off account's sign-in answer like a wrong password over repeated attempts too (its correct password counting toward the 15-minute wait), not only on a single attempt? | A: not necessary — the product is for the owner's personal use with controlled access; single attempts answer alike, and a switched-off account's correct password need not count toward the 15-minute wait | settles: REQ-014 | unchanged: REQ-014
+A-052 | human | 2026-11-25 | Q: must the renewal of the session identifier at sign-in also make the identifier from before stop working? | A: not necessary — the product is for the owner's personal use with controlled access; a new identifier is issued at each sign-in | settles: REQ-014 | unchanged: REQ-014
+```
+
+review: delta, round 1, 0 findings
