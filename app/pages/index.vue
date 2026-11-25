@@ -1,6 +1,6 @@
 <!-- Purpose: the person's own page, / (D-029, REQ-006, REQ-007) — their vacation days left for this year and next
      with each year's pending vacation days beside it, their own requests newest first with kind, days, counted
-     weekdays, state and who cancelled one and when, and the cancel of a pending one (REQ-005). Days are shown from their YYYY-MM-DD text as they are, never
+     weekdays, state, when it was sent and who cancelled one and when, and the cancel of a pending one (REQ-005). Days are shown from their YYYY-MM-DD text as they are, never
      turned into an instant, so every browser zone shows the same day (D-007, ROW-131). -->
 <script setup lang="ts">
 interface OwnRequest {
@@ -12,6 +12,7 @@ interface OwnRequest {
   inEffectDays: number
   cancelledDays: number
   state: string
+  sentAt: string
   decidedAt: string | null
   decidedBy: string | null
   rejectionNote: string | null
@@ -123,6 +124,7 @@ async function cancel(id: number) {
           <th scope="col">Last day</th>
           <th scope="col">Weekdays</th>
           <th scope="col">State</th>
+          <th scope="col">Sent</th>
           <th scope="col">Decided</th>
           <th scope="col">Cancelled</th>
           <th scope="col"><span class="visually-hidden">Actions</span></th>
@@ -137,6 +139,8 @@ async function cancel(id: number) {
             {{ r.countedDays }}<template v-if="r.cancelFrom"> ({{ r.inEffectDays }} in effect, {{ r.cancelledDays }} cancelled)</template>
           </td>
           <td>{{ label(r.state) }}</td>
+          <!-- REQ-017, ROW-139: when it was sent, as its team-zone date and time. -->
+          <td>{{ shownAt(r.sentAt) }}</td>
           <td>
             <template v-if="r.decidedAt">by {{ r.decidedBy ?? 'unknown' }}, {{ shownAt(r.decidedAt) }}</template>
             <template v-if="r.rejectionNote"><br>Note: {{ r.rejectionNote }}</template>

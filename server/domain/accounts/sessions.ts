@@ -107,7 +107,7 @@ const WAIT = 'Too many wrong passwords for this email. Wait 15 minutes, then try
 /**
  * REQ-014 arms 2 and 3, ROW-235 to ROW-238, ROW-169, ROW-239: signs a person in with an email (trimmed, any letter
  * case) and the exact password. Every refusal answers alike — an unknown email, a wrong password, a switched-off
- * account — and counts toward the email's attempt bound (D-026). The session row is written only when the account is
+ * account — and a wrong or blank password or an unknown email counts toward the email's attempt bound (D-026, D-045). The session row is written only when the account is
  * still switched on with the password that was checked, so a sign-in in flight across a switch-off or a password set
  * opens nothing. A new identifier is issued every time; a session the cookie carried before is ended.
  */
@@ -119,10 +119,13 @@ export async function signIn(event: H3Event, body: unknown): Promise<{ status: n
   const account = email === '' ? undefined : accountByEmail(email)
   const matches = await verifyPassword(password, account ? account.passwordHash : null)
   const refused = { status: 401, answer: { message: NO_SIGN_IN } }
-  if (!account || account.switchedOn !== 1 || !matches || password.trim() === '') {
+  if (!account || !matches || password.trim() === '') {
     recordWrongAttempt(email)
     return refused
   }
+  // REQ-014 arm 3, ROW-235: a switched-off account is refused with the same answer; its correct password is not a
+  // wrong-password attempt (D-026), so it does not start a wait the account would meet when switched back on (ROW-167).
+  if (account.switchedOn !== 1) return refused
   const previous = readSession(event).user
   const token = randomBytes(32).toString('base64url')
   const opened = inWriteTransaction((tx) => {
