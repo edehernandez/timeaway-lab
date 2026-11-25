@@ -94,6 +94,73 @@ test('ROW-024.REQ-005.a-person-never-cancels-their-own-approved-rejected-or-canc
   }
 });
 
+// ROW-024 promise (REQ-005 AMENDED under A-062): fail-if (4) "… or anyone cancels their own rejected or cancelled
+// ROW-024   request" — anyone, the admin included; only the admin's own APPROVED request moved out, to REQ-010 (A-061,
+// ROW-024   A-062), so this case asserts nothing about it.
+// ROW-024 wrong product: an own-cancel route reworked for A-062 as "refuse an approved request unless the caller is
+// ROW-024   the admin" that waves the admin through on every state — the admin's own rejected request turns cancelled,
+// ROW-024   or their own cancelled one is cancelled again with its who and when stamped anew.
+// ROW-024 given: today a Wednesday; the admin, with a fresh allowance A, holds R2, their own vacation they rejected,
+// ROW-024   and R3, their own sick request they cancelled themselves; the clock then moves one day on, so a re-stamp
+// ROW-024   would differ. when: the admin asks to cancel each through the own-cancel route. then: each is refused with a
+// ROW-024   rule's refusal; each record on the admin's own list is exactly as before, state and every field; the year
+// ROW-024   reads {A, 0}.
+// ROW-024 controls: the control case, at the same moved clock, has the admin cancel their own pending request and it
+// ROW-024   is cancelled — the route and the admin's session work there, so the target's refusals are about the state.
+// ROW-024 technique: the actor the amendment singled out, on the states it left forbidden to anyone; the record read
+// ROW-024   before and after, field by field, across a clock move.
+// ROW-024 cases: ROW-024 target=ROW-024.REQ-005.the-admin-never-cancels-their-own-rejected-or-cancelled-request control=ROW-024.control.the-admin-cancels-their-own-pending-request
+test('ROW-024.control.the-admin-cancels-their-own-pending-request', async () => {
+  const team = await setupTeam({ now: NOW, allowances: [], adminAllowance: randomInt(10, 20) });
+  const admin = team.admin;
+  try {
+    const id = await sendRequest(admin, { kind: 'vacation', ...weekdaySpan(addDays(TODAY, 7), 2) });
+    await moveClock(team, teamAt(addDays(TODAY, 1)));
+    const a = await tryCancel(admin, id);
+    expect.soft(a.ok, `ROW-024 control: the admin's own cancel answers 2xx (got ${describe(a)})`).toBe(true);
+    expect.soft((await ownRequest(admin, id))?.state, "ROW-024 control: the admin's own pending request is cancelled").toBe('cancelled');
+  } finally {
+    await team.dispose();
+  }
+});
+
+test('ROW-024.REQ-005.the-admin-never-cancels-their-own-rejected-or-cancelled-request', async () => {
+  const A = randomInt(10, 20);
+  const team = await setupTeam({ now: NOW, allowances: [], adminAllowance: A });
+  const admin = team.admin;
+  try {
+    const r2 = await sendRequest(admin, { kind: 'vacation', ...weekdaySpan(addDays(TODAY, 14), 2) });
+    await reject(admin, r2);
+    const r3 = await sendRequest(admin, { kind: 'sick', ...weekdaySpan(addDays(TODAY, 21), 2) });
+    await cancelOwnRequest(admin, r3);
+    const cases: [string, AccountId, string][] = [
+      ['R2 rejected by the admin', r2, 'rejected'],
+      ['R3 cancelled by the admin themselves', r3, 'cancelled'],
+    ];
+    const before = new Map<string, string>();
+    for (const [label, id, state] of cases) {
+      const r = await ownRequest(admin, id);
+      expect(r?.state, `ROW-024 setup: ${label} is listed ${state} on the admin's own list`).toBe(state);
+      before.set(label, JSON.stringify(r?.raw));
+    }
+    await moveClock(team, teamAt(addDays(TODAY, 1)));
+
+    const got: string[] = [];
+    const want: string[] = [];
+    for (const [label, id, state] of cases) {
+      const a = await tryCancel(admin, id);
+      const r = await ownRequest(admin, id);
+      const same = JSON.stringify(r?.raw) === before.get(label) ? 'record unchanged' : `record now ${JSON.stringify(r?.raw)}`;
+      got.push(`${label}: ${isRuleRefusal(a) ? 'refused' : describe(a)}, now ${r?.state}, ${same}`);
+      want.push(`${label}: refused, now ${state}, record unchanged`);
+    }
+    expect.soft(got, "ROW-024: the admin's own cancel of their own rejected or cancelled request is refused and changes nothing").toEqual(want);
+    expect.soft(await yearBalance(admin, Y), "ROW-024: the admin's year is untouched").toEqual({ daysLeft: A, pending: 0 });
+  } finally {
+    await team.dispose();
+  }
+});
+
 // ROW-250 promise: REQ-005 fail-if (5) "a person cancels their own pending request that has a weekday before today";
 // ROW-250   A-038 ("the admin approves or rejects it"); the row's cases: run across the test clock; the refusal says the
 // ROW-250   admin decides it. Today is the team zone's (D-007).
