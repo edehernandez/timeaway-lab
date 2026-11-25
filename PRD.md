@@ -502,7 +502,7 @@ review: delta, round 2, 1 findings
 
 ### 2026-11-25 (double-submit ruling)
 
-VID-QUESTION: (OQ-11) Should the rule that a double click, reload or Back never repeats a submit, nor shows a refusal of the person's own first submit, also cover every submitting control other than the send-request form — Cancel on a person's own requests, the change-password form, the forced new-password choice, the sign-in form, the admin's approve, reject, cancel and switch-off confirmations, and the people-page actions (create, rename, change email, set password, set allowance, switch)?
+RESOLVED: (OQ-11) A-059 — Should the rule that a double click, reload or Back never repeats a submit, nor shows a refusal of the person's own first submit, also cover every submitting control other than the send-request form — Cancel on a person's own requests, the change-password form, the forced new-password choice, the sign-in form, the admin's approve, reject, cancel and switch-off confirmations, and the people-page actions (create, rename, change email, set password, set allowance, switch)?
 
 ```vid-prd-answers
 A-050 | human | 2026-11-25 | Q: does the rule that a double click, reload or Back never repeats a submitted form, nor shows a refusal of the person's own first submit, cover every submitting control a person operates, or only the send-request form? | A: (c) record it as a known limit: only the send-request form is covered; every other submitting control stays open as OQ-11 | settles: REQ-003 | unchanged: REQ-003, REQ-005, REQ-009, REQ-014, REQ-015, REQ-020, REQ-025, REQ-026
@@ -572,3 +572,16 @@ F-149 | review | advisory | REQ-024, INVENTORY.md:ROW-254, INVENTORY.md:ROW-216 
 ```
 
 review: delta, round 3, 3 findings
+
+### 2026-11-25 (double-submit ruling, closed)
+
+```vid-prd-answers
+A-059 | human | 2026-11-25 | Q: (OQ-11) should the rule that a double click, reload or Back never repeats a submit, nor shows a refusal of the person's own first submit, also cover every submitting control other than the send-request form? | A: no — only the send-request form at this stage; the other controls are not required, and the debt held for them (ROW-287) is struck | settles: REQ-003 | unchanged: A-050, REQ-003, REQ-005, REQ-009, REQ-014, REQ-015, REQ-020, REQ-025, REQ-026
+```
+
+```vid-prd-findings
+F-150 | review | advisory | A-059, A-050 | repaired | evidence: round 1 — A-059 changes what A-050 left open; repaired: A-059 names A-050 unchanged
+F-151 | review | advisory | INVENTORY.md:ROW-208, A-059 | repaired | evidence: round 1 — ROW-208 pointed to the struck ROW-287; repaired: its parenthetical cites A-050 and A-059, ROW-287 struck in the same edit
+```
+
+review: delta, round 2, 2 findings
