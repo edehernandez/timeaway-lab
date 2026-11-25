@@ -4,7 +4,7 @@
 // pass a check the other would fail (REQ-002 arm 5, ROW-161). Today is the team clock's (RULE-005, D-007).
 import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
 import { db, inWriteTransaction, schema } from '~~/server/db'
-import { allowanceFor, listPeople, nowIso, teamTimeZone, todayInTeamZone, type Actor } from '~~/server/domain/accounts'
+import { allowanceFor, listPeople, nowIso, requireLiveIn, teamTimeZone, todayInTeamZone, type Actor } from '~~/server/domain/accounts'
 import { addDays, countWeekdays, strictDay, weekdaysIn } from './days'
 
 const { requests } = schema
@@ -193,6 +193,9 @@ export function sendForViewer(viewer: Actor, body: unknown): { id: number } {
   if (asked.length === 0) refuse(400, 'These days hold no Monday to Friday day, and only weekdays count. Choose at least one weekday.')
 
   return inWriteTransaction((tx) => {
+    // REQ-016, ROW-167, D-047: the session is re-checked here, inside the write — a switch-off (or sign-out) that
+    // completed while the route awaited the body has ended it, and nothing pending lands on a switched-off account.
+    requireLiveIn(tx, viewer)
     // The team's today at the moment of sending, read inside the transaction (REQ-004 arm 6, RULE-005).
     const problem = windowRefusal(kind, firstDay, lastDay, todayInTeamZone())
     if (problem !== null) refuse(400, problem)
@@ -257,6 +260,7 @@ export function sendForViewer(viewer: Actor, body: unknown): { id: number } {
 export function cancelOwnForViewer(viewer: Actor, idParam: string | undefined): { ok: true } {
   const id = requestIdFrom(idParam)
   inWriteTransaction((tx) => {
+    requireLiveIn(tx, viewer) // ROW-167, D-047: only a live session of a switched-on account cancels.
     const row = tx
       .select()
       .from(requests)

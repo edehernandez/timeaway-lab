@@ -22,6 +22,26 @@ export interface Actor {
   tokenHash?: string
 }
 
+/**
+ * REQ-016 (ROW-167), REQ-014 arm 5, REQ-015 arm 5, D-047: every write a session authorises re-checks, inside its own
+ * write transaction, that the session is still live and its account still switched on. A route checks the session
+ * first and then awaits (its body, a password hash); a switch-off, a sign-out or an admin-set password that completes
+ * during that await ends the session, and the write is then refused as an ended session (401, ROW-217) — it never
+ * lands on a switched-off account or for a session that no longer exists. An actor without a session is refused.
+ */
+export function requireLiveIn(tx: Tx, who: Actor): void {
+  const live =
+    who.tokenHash === undefined
+      ? undefined
+      : tx
+          .select({ id: accounts.id })
+          .from(sessions)
+          .innerJoin(accounts, eq(sessions.accountId, accounts.id))
+          .where(and(eq(sessions.tokenHash, who.tokenHash), eq(accounts.id, who.id), eq(accounts.switchedOn, 1)))
+          .get()
+  if (!live) throw createError({ statusCode: 401, message: 'Sign in first.', data: { message: 'Sign in first.', ended: true } })
+}
+
 // ---------------------------------------------------------------------------------------------------
 // The team time zone and today (D-007, D-013)
 // ---------------------------------------------------------------------------------------------------
@@ -291,6 +311,7 @@ export async function createAccount(by: Actor, body: unknown): Promise<{ id: num
   const allowance = allowanceFrom(f.allowance)
   const hash = await hashPassword(password)
   const id = write((tx) => {
+    requireLiveIn(tx, by)
     if (switchedOnCount(tx) >= MAX_SWITCHED_ON) refuse(409, `${MAX_SWITCHED_ON} accounts are already switched on; switch one off first.`)
     if (emailHolder(tx, email)) refuse(409, 'Another account already has this email.')
     if (switchedOnNameHolder(tx, nameKeyOf(name))) refuse(409, 'A switched-on account already has this name.')
@@ -303,6 +324,7 @@ export async function createAccount(by: Actor, body: unknown): Promise<{ id: num
 export function renameAccount(by: Actor, id: number, body: unknown): void {
   const name = nameFrom(fieldsOf(body).name)
   write((tx) => {
+    requireLiveIn(tx, by)
     const target = accountById(tx, id)
     if (!target) refuse(404, 'There is no such account.')
     if (target.switchedOn === 1 && switchedOnNameHolder(tx, nameKeyOf(name), id)) refuse(409, 'A switched-on account already has this name.')
@@ -316,6 +338,7 @@ export function renameAccount(by: Actor, id: number, body: unknown): void {
 export function changeEmail(by: Actor, id: number, body: unknown): void {
   const email = emailFrom(fieldsOf(body).email)
   write((tx) => {
+    requireLiveIn(tx, by)
     const target = accountById(tx, id)
     if (!target) refuse(404, 'There is no such account.')
     if (emailHolder(tx, email, id)) refuse(409, 'Another account already has this email.')
@@ -335,6 +358,7 @@ export async function setPassword(by: Actor, id: number, body: unknown): Promise
   const password = passwordFrom(fieldsOf(body).password)
   const hash = await hashPassword(password)
   write((tx) => {
+    requireLiveIn(tx, by)
     const target = accountById(tx, id)
     if (!target) refuse(404, 'There is no such account.')
     tx.update(accounts)
@@ -366,6 +390,8 @@ export async function changeOwnPassword(who: Actor, body: unknown): Promise<void
   if (next === current) refuse(400, 'Choose a new password that differs from the current one.')
   const hash = await hashPassword(next)
   write((tx) => {
+    // ROW-167, D-047: a switch-off or an admin-set password during the hashing above ended this session.
+    requireLiveIn(tx, who)
     const now = accountById(tx, who.id)
     if (!now || now.passwordVersion !== own.passwordVersion) refuse(409, 'Your password was changed meanwhile. Sign in again.')
     tx.update(accounts)
@@ -391,6 +417,7 @@ export function setAllowance(by: Actor, id: number, body: unknown): void {
   if (f.startsNextYear !== undefined && typeof f.startsNextYear !== 'boolean') refuse(400, 'Say whether the allowance starts next year.')
   const startsYear = teamYear() + (f.startsNextYear === true ? 1 : 0)
   write((tx) => {
+    requireLiveIn(tx, by)
     if (!accountById(tx, id)) refuse(404, 'There is no such account.')
     const old = allowanceIn(tx, id, startsYear)
     tx.insert(accountAllowances).values({ accountId: id, allowance, startsYear, madeAt: nowIso(), madeBy: by.id }).run()
@@ -431,6 +458,7 @@ export function switchOffIn(tx: Tx, by: Actor, id: number): void {
 export function switchAccount(by: Actor, id: number, body: unknown): { ok: true } {
   if (fieldsOf(body).on !== true) refuse(400, 'Say on: true to switch an account on; switching off is confirmed first.')
   write((tx) => {
+    requireLiveIn(tx, by)
     const target = accountById(tx, id)
     if (!target) refuse(404, 'There is no such account.')
     if (target.switchedOn === 1) refuse(409, `${target.name}'s account is already switched on.`)

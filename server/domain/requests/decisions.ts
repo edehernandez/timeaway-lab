@@ -6,7 +6,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { and, asc, eq, gt, inArray, isNull, or } from 'drizzle-orm'
 import { db, inWriteTransaction, schema } from '~~/server/db'
-import { accountIdFrom, nowIso, personOf, switchOffIn, switchOffTarget, teamTimeZone, todayInTeamZone, type Actor } from '~~/server/domain/accounts'
+import { accountIdFrom, nowIso, personOf, requireLiveIn, switchOffIn, switchOffTarget, teamTimeZone, todayInTeamZone, type Actor } from '~~/server/domain/accounts'
 import {
   balanceFor,
   daysInEffect,
@@ -315,6 +315,7 @@ function decide(action: 'approve' | 'reject', by: Actor, idParam: string | undef
   const id = requestIdFrom(idParam)
   const note = action === 'reject' ? noteFrom(fieldsOf(body).note) : null
   return inWriteTransaction((tx) => {
+    requireLiveIn(tx, by) // D-047: the admin's session is still live when the act lands.
     const row = requestRow(tx, id)
     const plan = requestPlan(action, row, nameOfAccount(row.accountId), todayInTeamZone())
     if (!tokenMatches(tokenFrom(body), plan.effect)) refuse(409, STALE)
@@ -333,6 +334,7 @@ function decide(action: 'approve' | 'reject', by: Actor, idParam: string | undef
 export function adminCancel(by: Actor, idParam: string | undefined, body: unknown): ActAnswer {
   const id = requestIdFrom(idParam)
   return inWriteTransaction((tx) => {
+    requireLiveIn(tx, by) // D-047
     const row = requestRow(tx, id)
     const today = todayInTeamZone()
     const plan = requestPlan('cancel', row, nameOfAccount(row.accountId), today)
@@ -350,6 +352,7 @@ export function adminCancel(by: Actor, idParam: string | undefined, body: unknow
  */
 export function switchOffAccount(by: Actor, id: number, body: unknown): { ok: true; id: number } {
   return inWriteTransaction((tx) => {
+    requireLiveIn(tx, by) // D-047
     const plan = switchOffPlan(id, todayInTeamZone())
     if (!tokenMatches(tokenFrom(body), plan.effect)) refuse(409, STALE)
     const at = nowIso()
