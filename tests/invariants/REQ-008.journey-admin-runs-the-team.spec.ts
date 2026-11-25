@@ -1,5 +1,8 @@
 // Purpose: ledger journey test for ROW-121 (REQ-008, REQ-009, REQ-010, REQ-013, REQ-015, REQ-016, REQ-019, REQ-020, REQ-021, REQ-025) — the admin creates an account, approves and rejects requests through their confirmations, cancels the rest of an approved vacation running across today, sets a forgotten password and switches a leaver off — every transition operated in the browser.
 // Provenance: hand-authored (test-author pass, slice 0, journeys batch test-author-9); fixture data (the team, its requests, the approval of the vacation that later runs across today, the members' own password choice) made through the product's public routes by harness.ts, fresh per run; the journey's own transitions are operated only through the engine door.
+// Repaired (slice 1, brief test-author-12): an item is found by its own first and last day drawn as dates (drawnDay),
+// never by lone numbers a note tag or a Sent time supplies; day and figure reads take out names, emails, the note
+// and times of day first. Every assertion kept.
 //
 // Boundary (R6): a journey — operation and paint — so the browser, through harness.openPage; setup reaches the
 // starting state through the API and never performs a transition. Effects the page does not carry are read where the
@@ -65,6 +68,10 @@
 // ROW-121   date differ, so a UTC "today" is caught by the exact days-left figure; decoys for every list and the
 // ROW-121   calendar (another pending person, another person's approved day on the same date); before/after for each
 // ROW-121   effect; confirmation texts read for the person, the days and the effect, and for no other person.
+// ROW-121   Items are found by their own first and last day drawn as dates ("4 Mar", "Mar 4", 2027-03-04, "4–10 March";
+// ROW-121   never "March 10:00"), so the rejected 29–31 March item, whose Sent time holds a 10 and whose note tag may
+// ROW-121   hold a lone 4, is never taken for the 4–10 March one; days and figures are read with the run-id literals
+// ROW-121   (names, emails, note) and times taken out, so a fresh value never stands in for the promised one.
 // ROW-121 cases: ROW-121 target=ROW-121.REQ-008.REQ-009.REQ-010.REQ-013.REQ-015.REQ-016.REQ-019.REQ-020.REQ-021.REQ-025.journey-admin-runs-the-team control=ROW-121.control.admin-reaches-people-and-pending-pages-with-the-fixture-listed
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import {
@@ -93,7 +100,6 @@ import {
   expectPath,
   itemLocator,
   monthToken,
-  namesDay,
   numbersIn,
   readItems,
   recordDialogs,
@@ -102,6 +108,7 @@ import {
   waitItems,
   type ItemRead,
 } from './journey-pages';
+import { datePatterns, withoutLiterals } from './page-reading';
 
 const ZONE = 'Pacific/Auckland';
 const T_SETUP = '2027-02-28T21:00:00Z'; // Mon 2027-03-01 10:00 in Auckland; UTC still Sunday 28 February
@@ -132,8 +139,45 @@ test.afterEach(async () => {
   for (const d of disposables.splice(0)) await d.dispose().catch(() => undefined);
 });
 
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const ORD = '(?:st|nd|rd|th)?';
+const RANGE_DASH = '\\s*(?:[-–—]|to|until|till|through)\\s*';
+/** After a day number: no further digit, and no time of day (":00", " am") — so "1 March 10:00" never draws 10 March. */
+const NOT_TIME = '(?!\\d)(?!\\s*(?::\\d|[ap]\\.?m\\b))';
+
+/**
+ * ROW-121: a regex source (case-insensitive) matching the day `iso` drawn AS A DATE — its day number joined to its
+ * month in one English rendering (page-reading.ts datePatterns: "4 March", "Mar 4", 2027-03-04, 04/03/2027 …), or as
+ * one end of a range whose month is written once ("4–10 March", "March 4–10") — never a lone number a note, a name,
+ * a Sent time or a count supplies.
+ */
+function drawnDay(iso: string): string {
+  const [, m, d] = iso.split('-').map(Number);
+  const full = MONTH_NAMES[m - 1];
+  const abbr = full.slice(0, 3);
+  const month = `(?:${full}|${abbr === 'Sep' ? 'Sept?' : abbr}\\.?)`;
+  const day = `0?${d}${ORD}`;
+  const forms = [
+    ...datePatterns(iso),
+    `(?<!\\d)${day}${RANGE_DASH}\\d{1,2}${ORD}\\s+(?:of\\s+)?${month}(?![a-z])`,
+    `(?<![a-z])${month}\\s+\\d{1,2}${ORD}${RANGE_DASH}${day}`,
+  ];
+  return `(?:${forms.map((f) => `(?:${f})${NOT_TIME}`).join('|')})`;
+}
+
+/** ROW-121: an item is found by its own first and last day as drawn (drawnDay), both. */
 function days(spec: { firstDay: string; lastDay: string }): string[] {
-  return [...namesDay(spec.firstDay), ...namesDay(spec.lastDay)];
+  return [drawnDay(spec.firstDay), drawnDay(spec.lastDay)];
+}
+
+/** ROW-121: `text` without its times of day ("10:00", "9:05 am"), so an hour never reads as a day of the month. */
+function withoutTimes(text: string): string {
+  return text.replace(/(?<!\d)\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]\.?m\.?)?/gi, ' ');
+}
+
+/** ROW-121: `text` with the fixture's run-id-bearing literals (names, emails, the note) and its times removed. */
+function scrub(text: string, literals: string[]): string {
+  return withoutTimes(withoutLiterals(text, literals.filter((l) => l.length > 0)));
 }
 
 /** Submits the form holding `field`: its submit button, else a button named like a submit inside it, else Enter. */
@@ -157,11 +201,15 @@ async function confirmChecked(
   person: string,
   must: { days: string[]; effect: RegExp; also?: RegExp[] },
   others: string[],
+  noise: string[] = [],
 ): Promise<void> {
   const shown = await awaitConfirmation(page, dialogs, before, person, `ROW-121 ${step}`);
   const t = shown.text;
+  // The days are read with the names (run-id digits), the emails, the note and every time of day taken out first, so
+  // a "22" inside a name or the "10" of 10:00 never stands in for a day the confirmation should name.
+  const daysText = scrub(t, [person, ...others, ...noise]);
   expect.soft(t.includes(person), `ROW-121 ${step}: the confirmation names the person, ${person} (read: "${t}")`).toBe(true);
-  for (const iso of must.days) expect.soft(textNamesDay(t, iso), `ROW-121 ${step}: the confirmation names ${iso} (read: "${t}")`).toBe(true);
+  for (const iso of must.days) expect.soft(textNamesDay(daysText, iso), `ROW-121 ${step}: the confirmation names ${iso} (read: "${t}"; days read in: "${daysText}")`).toBe(true);
   expect.soft(must.effect.test(t), `ROW-121 ${step}: the confirmation says what will change, ${must.effect} (read: "${t}")`).toBe(true);
   for (const re of must.also ?? []) expect.soft(re.test(t), `ROW-121 ${step}: the confirmation says ${re} (read: "${t}")`).toBe(true);
   for (const o of others) expect.soft(t.includes(o), `ROW-121 ${step}: the confirmation names no other person — not ${o}`).toBe(false);
@@ -203,6 +251,7 @@ test('ROW-121.REQ-008.REQ-009.REQ-010.REQ-013.REQ-015.REQ-016.REQ-019.REQ-020.RE
   const { admin, pia, quinn, rua, pia$ } = await team();
   const newcomer = { name: freshName('Newcomer'), email: freshEmail('newcomer'), password: freshPassword(), allowance: NEW_ALLOWANCE };
   const note = `Note ${freshName('clash')} — the release week`;
+  const noise = [pia.email, quinn.email, rua.email, newcomer.name, newcomer.email, note];
   const opened = await openPage(browser, admin);
   pages.push(opened);
   const page = opened.page;
@@ -228,7 +277,8 @@ test('ROW-121.REQ-008.REQ-009.REQ-010.REQ-013.REQ-015.REQ-016.REQ-019.REQ-020.RE
     const [row] = await waitItems(page, { includes: [newcomer.email] }, 1, 'ROW-121 T1: the new account is listed once');
     expect.soft(row.text.includes(newcomer.name), `ROW-121 T1: the item shows the name typed (read: "${row.text}")`).toBe(true);
     expect.soft(ON_STATE.test(row.plain) && !OFF_STATE.test(row.plain), `ROW-121 T1: the account is shown switched on (read: "${row.plain}")`).toBe(true);
-    const figures = numbersIn(row.plain, [2027, 2028]);
+    // The figures are read with the name and the email taken out: their run-id digits ("…k21…", "…25…") are no figure.
+    const figures = numbersIn(scrub(row.plain, [newcomer.name, newcomer.email]), [2027, 2028]);
     expect.soft(figures.filter((n) => n === NEW_ALLOWANCE).length, `ROW-121 T1: the item shows the allowance 21 and the days left 21 (read: "${row.plain}")`).toBeGreaterThanOrEqual(2);
     expect.soft(figures.includes(25), `ROW-121 T1: the item does not show the default 25 for the 21 typed (read: "${row.plain}")`).toBe(false);
     await expect.soft(control(itemLocator(page, row), SWITCH_OFF), 'ROW-121 T1: a switched-on account offers switch off').toHaveCount(1);
@@ -241,7 +291,7 @@ test('ROW-121.REQ-008.REQ-009.REQ-010.REQ-013.REQ-015.REQ-016.REQ-019.REQ-020.RE
 
     const before = dialogs.length;
     await control(itemLocator(page, item), APPROVE).first().click();
-    await confirmChecked(page, dialogs, before, 'T2', quinn.name, { days: [TO_APPROVE.firstDay, TO_APPROVE.lastDay], effect: /approv/i }, [pia.name, rua.name]);
+    await confirmChecked(page, dialogs, before, 'T2', quinn.name, { days: [TO_APPROVE.firstDay, TO_APPROVE.lastDay], effect: /approv/i }, [pia.name, rua.name], noise);
 
     await expectPath(page, PAGES.adminPending, 'ROW-121 T2: approving returns to the pending requests page');
     await waitItems(page, { includes: [quinn.name] }, 0, 'ROW-121 T2: Quinn\'s request is gone from the pending list');
@@ -268,7 +318,7 @@ test('ROW-121.REQ-008.REQ-009.REQ-010.REQ-013.REQ-015.REQ-016.REQ-019.REQ-020.RE
       const confirmNow = page.getByRole('button', { name: /^(confirm|yes)\b/i }).filter({ visible: true });
       if ((await confirmNow.count()) === 0) await submitFormOf(page, noteBox(page).first());
     }
-    await confirmChecked(page, dialogs, before, 'T3', pia.name, { days: [TO_REJECT.firstDay, TO_REJECT.lastDay], effect: /reject/i }, [quinn.name, rua.name]);
+    await confirmChecked(page, dialogs, before, 'T3', pia.name, { days: [TO_REJECT.firstDay, TO_REJECT.lastDay], effect: /reject/i }, [quinn.name, rua.name], noise);
 
     await expectPath(page, PAGES.adminPending, 'ROW-121 T3: rejecting returns to the pending requests page');
     await waitItems(page, { includes: [pia.name] }, 0, 'ROW-121 T3: Pia\'s request is gone from the pending list');
@@ -302,6 +352,7 @@ test('ROW-121.REQ-008.REQ-009.REQ-010.REQ-013.REQ-015.REQ-016.REQ-019.REQ-020.RE
       pia.name,
       { days: ['2027-03-09', '2027-03-04'], effect: /cancel/i, also: [/\b(stay|stays|remain|remains|kept|keep|keeps|unchanged)\b/i] },
       [quinn.name, rua.name],
+      noise,
     );
 
     await expectPath(page, piaPage, 'ROW-121 T4: cancelling stays on Pia\'s requests page');
@@ -319,7 +370,9 @@ test('ROW-121.REQ-008.REQ-009.REQ-010.REQ-013.REQ-015.REQ-016.REQ-019.REQ-020.RE
     const after = now[0] ?? { plain: '', text: '', index: -1 };
     expect.soft(/\bapproved\b/i.test(after.plain), `ROW-121 T4: the request stays approved (read: "${after.plain}")`).toBe(true);
     expect.soft(/cancel/i.test(after.plain), `ROW-121 T4: its later days are shown cancelled (read: "${after.plain}")`).toBe(true);
-    expect.soft(new RegExp(dayToken(9)).test(after.plain) && new RegExp(monthToken(3), 'i').test(after.plain), `ROW-121 T4: it shows the cancel from 9 March, today in the team zone (read: "${after.plain}")`).toBe(true);
+    // The cancel day is read with every time of day and the fixture's names taken out, so "09:00" never reads as 9 March.
+    const cancelText = scrub(after.plain, [pia.name, pia.email, note]);
+    expect.soft(new RegExp(dayToken(9)).test(cancelText) && new RegExp(monthToken(3), 'i').test(cancelText), `ROW-121 T4: it shows the cancel from 9 March, today in the team zone (read: "${after.plain}")`).toBe(true);
     if (after.index >= 0) await expect.soft(control(itemLocator(page, after), CANCEL), 'ROW-121 T4: no cancel control is left on it (no weekday from today on)').toHaveCount(0);
     const left = ((await readBalance(pia$)).years.find((y) => y.year === 2027) ?? { daysLeft: NaN }).daysLeft;
     expect.soft(left, 'ROW-121 T4: Pia\'s 2027 days left are restored by the 2 cancelled days, 20 → 22 (23 would cancel from the UTC date)').toBe(22);
@@ -357,7 +410,7 @@ test('ROW-121.REQ-008.REQ-009.REQ-010.REQ-013.REQ-015.REQ-016.REQ-019.REQ-020.RE
 
     const before = dialogs.length;
     await control(itemLocator(page, row), SWITCH_OFF).first().click();
-    await confirmChecked(page, dialogs, before, 'T6', quinn.name, { days: [TO_APPROVE.firstDay, TO_APPROVE.lastDay], effect: /\boff\b|switch/i }, [pia.name, rua.name, newcomer.name]);
+    await confirmChecked(page, dialogs, before, 'T6', quinn.name, { days: [TO_APPROVE.firstDay, TO_APPROVE.lastDay], effect: /\boff\b|switch/i }, [pia.name, rua.name, newcomer.name], noise);
 
     await expectPath(page, PAGES.adminPeople, 'ROW-121 T6: switching off returns to the people page');
     let after: ItemRead[] = [];
