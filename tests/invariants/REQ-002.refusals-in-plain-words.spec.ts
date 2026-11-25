@@ -4,9 +4,13 @@
 // Boundary (R6): what a refusal says and what the form keeps is paint and operation — proved in the browser on the
 // send form (/requests/new) and the people page's create form (/admin/people). The message is read as the text the
 // press made appear (lines absent before the press, present after); form readings: robustness.ts.
-import { test, expect, type Locator, type Page } from '@playwright/test';
-import { approve, createMember, freshName, freshPassword, openPage, sendRequest, setClock, signInMember, type Actor } from './harness';
+// Slice 1, brief test-author-25 (owner grant A-053): the switch-on refusal at 30 switched-on accounts (REQ-013 arm 3),
+// pressed on the people page (/admin/people); every earlier case is kept as it was.
+import { test, expect, type Dialog, type Locator, type Page } from '@playwright/test';
+import { approve, createMember, freshName, freshPassword, openPage, PAGES, sendRequest, setClock, signInMember, switchAccount, type Actor } from './harness';
 import { hasDate, hasNumber } from './page-reading';
+import { actionControl } from './admin-kit';
+import { canSignIn } from './team-calendar';
 import {
   chosenKind,
   createForm,
@@ -424,5 +428,200 @@ test('ROW-206.REQ-004.every-refusal-the-items-name-says-its-rule-and-keeps-the-v
       if (a.group === b.group || a.said === '' || b.said === '') continue;
       expect.soft(a.said === b.said, `ROW-206: "${a.rule}" and "${b.rule}" say different things (both said: "${a.said}")`).toBe(false);
     }
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-206 — the switch-on refusal at 30 switched-on accounts, pressed on the people page (added, slice 1, brief
+// test-author-25)
+// ---------------------------------------------------------------------------------------------------
+// ROW-206 promise: the row — every refusal says in plain words which rule refused it and keeps what the person had;
+// ROW-206   its item REQ-013 arm 3 ("an account is created or switched on while 30 are already switched on") and A-025
+// ROW-206   ("creating or switching on a 31st is refused"): the switch-on refusal, which the case above never presses
+// ROW-206   (it presses only the 31st create). D-037: a rule refusal is one plain message naming its rule.
+// ROW-206 wrong product: a people page whose switch-on press, refused at 30, shows a generic "Something went wrong" (or
+// ROW-206   nothing at all, or the fallback of a 500 because only create checks the limit and the store refuses); one that
+// ROW-206   reloads the page into another state, draws the account as switched on although the server refused, drops the
+// ROW-206   row's switch-on control, or loses the list; one that switches the account on anyway (a 31st).
+// ROW-206 given: today Mon 2027-03-08 in the team zone; Otto (fresh name, his own password) is switched off, then 29
+// ROW-206   more accounts are made, so the admin and 29 others are 30 switched on. when: the admin opens the people page,
+// ROW-206   reads every account's row (by its email), and presses Otto's switch-on control (confirming it if the page
+// ROW-206   asks). then: text appears (or a browser alert says, or the held-back control's own description says) that
+// ROW-206   names the limit —
+// ROW-206   30 / thirty / limit / maximum / at most / too many / full / no more; the page is still /admin/people; Otto's
+// ROW-206   row reads as before (the message's own lines aside) and still offers switch on; every other account's row
+// ROW-206   reads exactly as before; Otto still cannot sign in.
+// ROW-206 controls: ROW-206.control.a-switch-on-pressed-below-the-limit-switches-the-account-on — the same page, the
+// ROW-206   same press, with 29 switched on: Otto then signs in, so the press reaches the server and the target's refusal
+// ROW-206   is the limit's.
+// ROW-206 technique: the limit's two sides (29 and 30 switched on), the press made through the page's own control,
+// ROW-206   before and after readings of every account's row (the neighbours are the rows that must stay untouched), each
+// ROW-206   row bounded by the other accounts' fresh emails so no row is mistaken for another.
+// ROW-206 cases: ROW-206 target=ROW-206.REQ-013.the-switch-on-refusal-at-30-names-the-limit-and-keeps-the-page control=ROW-206.control.a-switch-on-pressed-below-the-limit-switches-the-account-on
+
+const SWITCH_ON = /^(switch(ed)? on|turn on|reactivate|activate|enable)\b/i;
+const CONFIRM_ON = /^\s*(confirm|yes|ok|switch on|turn on|reactivate|activate|enable)\b/i;
+
+/** A fresh team with Otto switched off and `othersOn` more accounts switched on beside the admin; `emails` lists every account. */
+async function ottoOffWith(othersOn: number): Promise<{ admin: Actor; otto: Awaited<ReturnType<typeof createMember>>; emails: string[] }> {
+  const { install, admin } = await freshTeam();
+  const otto = await createMember(admin, { name: freshName('Otto') });
+  await switchAccount(admin, otto.id, false);
+  const emails = [install.admin.email, otto.email];
+  for (let i = 0; i < othersOn; i += 1) emails.push((await createMember(admin, { choosePassword: false })).email);
+  return { admin, otto, emails: emails.map((e) => e.toLowerCase()) };
+}
+
+/**
+ * Every account's drawn row, as trimmed non-empty lines of its visible text (null when the page does not draw the
+ * account): the element holding the account's email, widened to its largest ancestor that holds no other account's
+ * email (the reading of the people-page cases, REQ-020's drawnAccount).
+ */
+async function rowLines(page: Page, emails: string[]): Promise<Map<string, string[] | null>> {
+  const read = await page
+    .evaluate((all) => {
+      const out: Record<string, string | null> = {};
+      for (const email of all) {
+        let host: Element | null = null;
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if ((n.textContent || '').toLowerCase().includes(email)) {
+            host = n.parentElement;
+            break;
+          }
+        }
+        if (!host) {
+          out[email] = null;
+          continue;
+        }
+        let row: Element = host;
+        while (row.parentElement && row.parentElement !== document.body && row.parentElement !== document.documentElement) {
+          const t = (row.parentElement.textContent || '').toLowerCase();
+          if (all.some((o) => o !== email && t.includes(o))) break;
+          row = row.parentElement;
+        }
+        out[email] = (row as HTMLElement).innerText ?? row.textContent ?? '';
+      }
+      return out;
+    }, emails)
+    .catch(() => ({}) as Record<string, string | null>);
+  const lines = new Map<string, string[] | null>();
+  for (const e of emails) {
+    const t = read[e];
+    lines.set(e, t === null || t === undefined ? null : t.split('\n').map((l) => l.trim()).filter((l) => l !== ''));
+  }
+  return lines;
+}
+
+/** Otto's switch-on control: inside the innermost block holding his email and no other account's, a button or link named switch on. */
+function switchOnControl(page: Page, email: string, emails: string[]): Locator {
+  return actionControl(page, email, emails.filter((e) => e !== email), SWITCH_ON);
+}
+
+/** Opens the people page and waits (bounded) until every account's row is drawn. */
+async function openPeople(page: Page, emails: string[]): Promise<void> {
+  await page.goto(PAGES.adminPeople);
+  await settle(page);
+  await expect
+    .poll(async () => [...(await rowLines(page, emails)).values()].filter((v) => v !== null).length, { timeout: 15_000 })
+    .toBe(emails.length)
+    .catch(() => undefined);
+}
+
+/**
+ * Presses Otto's switch-on control as the admin would: accepts a native confirm, presses a confirmation dialog's
+ * confirming button when one opens, and answers what the press said — the lines it made appear (read after any
+ * confirmation opened), with any browser alert's message; when the control is held back (disabled), its own
+ * description (title, aria-description, described-by text) and the row's text instead. `pressed` says which.
+ */
+async function pressSwitchOn(page: Page, email: string, emails: string[]): Promise<{ said: string; pressed: boolean }> {
+  const control = switchOnControl(page, email, emails);
+  if ((await control.count()) === 0) return { said: '', pressed: false };
+  if (await control.isDisabled().catch(() => false)) {
+    const described = await control
+      .evaluate((el) => {
+        const ids = (el.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean);
+        const by = ids.map((id) => document.getElementById(id)?.innerText ?? '').join(' ');
+        return [el.getAttribute('title') ?? '', el.getAttribute('aria-description') ?? '', by].join(' ');
+      })
+      .catch(() => '');
+    const row = (await rowLines(page, emails)).get(email) ?? [];
+    return { said: `${described} ${(row ?? []).join(' ')}`.trim(), pressed: false };
+  }
+  const alerts: string[] = [];
+  const onDialog = (d: Dialog) => {
+    if (d.type() === 'alert') alerts.push(d.message());
+    void d.accept();
+  };
+  page.on('dialog', onDialog);
+  try {
+    let before = await textLines(page);
+    await control.click();
+    const dialog = page.getByRole('dialog').or(page.getByRole('alertdialog')).filter({ visible: true }).first();
+    if (await dialog.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true, () => false)) {
+      const confirm = dialog.getByRole('button', { name: CONFIRM_ON }).first();
+      if ((await confirm.count()) > 0) {
+        before = await textLines(page);
+        await confirm.click();
+      }
+    }
+    await settle(page);
+    let appeared: string[] = [];
+    await expect
+      .poll(async () => (appeared = newLines(before, await textLines(page))).length + alerts.length, { timeout: 10_000 })
+      .toBeGreaterThan(0)
+      .catch(() => undefined);
+    return { said: [...appeared, ...alerts].join(' | '), pressed: true };
+  } finally {
+    page.off('dialog', onDialog);
+  }
+}
+
+test('ROW-206.control.a-switch-on-pressed-below-the-limit-switches-the-account-on', async ({ browser }) => {
+  test.setTimeout(300_000);
+  const { admin, otto, emails } = await ottoOffWith(28);
+  expect(await canSignIn(otto.email, otto.password), 'ROW-206 control: Otto, switched off, gives no session before').toBe(false);
+  const opened = await openPage(browser, admin);
+  try {
+    await openPeople(opened.page, emails);
+    const { pressed } = await pressSwitchOn(opened.page, otto.email.toLowerCase(), emails);
+    expect(pressed, "ROW-206 control: Otto's row offers a switch-on control that can be pressed").toBe(true);
+    await expect.poll(() => canSignIn(otto.email, otto.password), { message: 'ROW-206 control: with 29 switched on, the press switches Otto on', timeout: 15_000 }).toBe(true);
+  } finally {
+    await opened.close();
+  }
+});
+
+test('ROW-206.REQ-013.the-switch-on-refusal-at-30-names-the-limit-and-keeps-the-page', async ({ browser }) => {
+  test.setTimeout(300_000);
+  const { admin, otto, emails } = await ottoOffWith(29);
+  const ottoEmail = otto.email.toLowerCase();
+  expect(await canSignIn(otto.email, otto.password), 'ROW-206 switch on at 30: Otto, switched off, gives no session before').toBe(false);
+  const opened = await openPage(browser, admin);
+  const page = opened.page;
+  try {
+    await openPeople(page, emails);
+    const before = await rowLines(page, emails);
+    for (const [e, lines] of before) expect(lines, `ROW-206 switch on at 30: ${e}'s row is drawn on the people page before the press`).not.toBeNull();
+    const { said, pressed } = await pressSwitchOn(page, ottoEmail, emails);
+    const rule = 'the switch-on of a 31st switched-on account (REQ-013 arm 3)';
+    expect.soft(said.length, `ROW-206 ${rule}: the refusal says something${pressed ? '' : ' (the control was held back, not pressed)'}`).toBeGreaterThan(0);
+    expect.soft(WORDS.limit.test(said), `ROW-206 ${rule}: the refusal names the limit in plain words (said: "${said}")`).toBe(true);
+    expect.soft(new URL(page.url()).pathname, `ROW-206 ${rule}: the page is still the people page`).toBe(PAGES.adminPeople);
+
+    const saidLines = new Set(said.split(' | ').map((l) => l.trim()));
+    const after = await rowLines(page, emails);
+    for (const e of emails) {
+      const b = before.get(e) ?? null;
+      const a = after.get(e) ?? null;
+      expect.soft(a, `ROW-206 ${rule}: ${e}'s row is still drawn after the press`).not.toBeNull();
+      if (a === null || b === null) continue;
+      const kept = e === ottoEmail ? a.filter((l) => !saidLines.has(l)) : a;
+      expect.soft(kept, `ROW-206 ${rule}: ${e === ottoEmail ? "Otto's row reads as before, the message aside" : `${e}'s row reads exactly as before`}`).toEqual(b);
+    }
+    expect.soft(await switchOnControl(page, ottoEmail, emails).count(), `ROW-206 ${rule}: Otto's row still offers switch on`).toBe(1);
+    expect.soft(await canSignIn(otto.email, otto.password), `ROW-206 ${rule}: Otto was not switched on (still no session)`).toBe(false);
+  } finally {
+    await opened.close();
   }
 });

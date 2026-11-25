@@ -9,8 +9,12 @@
 // a change of the server process's zone itself is ROW-137's, and needs a harness control this harness lacks.
 // The calendar is paint too: read as painted (robustness.ts readGrid — dated cells and weekday headings by their boxes)
 // on /calendar in browser zones at both extremes of UTC (slice 1 addition, batch test-author-10).
+// Slice 1, brief test-author-25 (owner grant A-053): the server process's own zone moved off UTC through the D-048
+// restart door (doors-process.ts restartProduct), west and east, with the stored, counted, shown and painted checks
+// repeated there; every earlier case is kept as it was. These cases run last in the file and restore the image's zone.
 import { test, expect, type Browser } from '@playwright/test';
 import { approve, freshName, PAGES, type AccountId } from './harness';
+import { restartProduct } from './doors-process';
 import { readGrid, settle, shownMonth } from './robustness';
 import {
   addDays,
@@ -342,4 +346,87 @@ test('ROW-130.REQ-012.calendar-paints-days-on-their-dates-in-every-browser-zone-
 test('ROW-130.REQ-012.calendar-paints-days-on-their-dates-in-every-browser-zone-team-west', async ({ browser }) => {
   test.setTimeout(600_000);
   await runCalendarConfig(browser, WEST, 'WEST');
+});
+
+// ---------------------------------------------------------------------------------------------------
+// The server process's zone away from UTC (added: test-author pass, slice 1, brief test-author-25, through the D-048
+// restart door; these cases come last in the file and put the image's own zone back when they end)
+// ---------------------------------------------------------------------------------------------------
+
+/** Process zones west and east of UTC, each with its own daylight-saving changes inside the configs' ranges. */
+const SERVER_ZONES = [LOS_ANGELES, AUCKLAND];
+
+/** Runs `fn` with the product restarted under the process time zone `zone`, and restarts it under the image's own zone after, whatever happened. */
+async function withServerZone(zone: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await restartProduct({ timeZone: zone });
+    await fn();
+  } finally {
+    await restartProduct();
+  }
+}
+
+/** Every check of runConfig and the painted calendar, for both team configs, under one server zone. */
+async function runUnderServerZone(browser: Browser, serverZone: string): Promise<void> {
+  await withServerZone(serverZone, async () => {
+    for (const [key, cfg] of [['EAST', EAST], ['WEST', WEST]] as const) {
+      const label = `${cfg.label}, server process ${serverZone}`;
+      await runConfig(browser, { ...cfg, label });
+      const w = await approvedWorld(cfg);
+      for (const m of CALENDAR_MONTHS[key]) {
+        expect
+          .soft(await calendarProblems(browser, w, cfg.teamZone, 2027, m), `ROW-130 (${label}, browser in the team zone) /calendar 2027-${m}: every away day painted on its own date`)
+          .toEqual([]);
+      }
+    }
+  });
+}
+
+// ROW-130 promise: as above — REQ-001 (only Monday to Friday counted), REQ-017 (the first and last day as sent),
+// ROW-130   REQ-012 (each approved weekday on the calendar) and D-007 (days are calendar dates in the team's zone, today
+// ROW-130   computed on the server): the same calendar day stored, counted and shown "whatever the SERVER, browser and
+// ROW-130   team time zones" — the server half, which the earlier cases left at the container's UTC.
+// ROW-130 wrong product: a server that reads a sent day with new Date('2027-04-05') and takes its weekday or its date
+// ROW-130   back with the process's local getDay()/getDate() — right under UTC, one day early under America/Los_Angeles
+// ROW-130   (Monday read as Sunday, Saturday as Friday, so the count, the stored day and the calendar move) — or one that
+// ROW-130   builds a day as a local midnight (new Date(y, m, d)) and writes it with toISOString(), one day early under
+// ROW-130   Pacific/Auckland; or one that walks a range in 24-hour steps from a local midnight, so the 23- and 25-hour
+// ROW-130   days of the process zone's own daylight-saving changes (Los Angeles 14 Mar and 7 Nov 2027, Auckland 4 Apr and
+// ROW-130   26 Sep 2027, all inside the ranges) drop or double a day; server-rendered pages formatting in the process zone.
+// ROW-130 given: the product restarted under process zone America/Los_Angeles, then under Pacific/Auckland; under each,
+// ROW-130   both configs of the earlier cases (team Auckland with a Los Angeles browser, team Los Angeles with an Auckland
+// ROW-130   browser): member V's two vacations each across one of the team zone's changes, member S's sick range across
+// ROW-130   both. when: the requests are sent, read, shown, approved, listed on the calendar and the calendar painted.
+// ROW-130 then: every check of runConfig — each record carries exactly its first and last day as sent; V's pending count
+// ROW-130   and S's count are the oracle's weekdays and never one off; the own page, the pending page and the person page
+// ROW-130   show each first and last day and never the day before the first or after the last; each calendar month lists
+// ROW-130   the person on exactly the range's weekdays — and /calendar, painted in a browser in the team's zone, puts each
+// ROW-130   away weekday in its own dated cell under its own weekday's heading, never the cell either side.
+// ROW-130 controls: ROW-130.control.a-day-reaches-the-calendar-after-a-server-zone-restart — after a restart under Los
+// ROW-130   Angeles the product answers, a send is recorded, and an approved day reaches the calendar's month on some day:
+// ROW-130   the restart door, the reset and the paths work there, whatever the day arithmetic.
+// ROW-130 technique: the clock's origin — the process zone on each side of UTC, crossed with team and browser zones on
+// ROW-130   each side, and ranges straddling every daylight-saving change of all of them — against the test's own UTC
+// ROW-130   weekday oracle, with the day either side of every range as the decoy.
+// ROW-130 cases: ROW-130 target=ROW-130.REQ-017.days-stay-put-with-the-server-process-in-los-angeles control=ROW-130.control.a-day-reaches-the-calendar-after-a-server-zone-restart
+test('ROW-130.control.a-day-reaches-the-calendar-after-a-server-zone-restart', async () => {
+  test.setTimeout(300_000);
+  await withServerZone(LOS_ANGELES, async () => {
+    const team = await startTeam({ zone: AUCKLAND, now: teamInstant(AUCKLAND, '2027-03-10', '15:00') });
+    const v = await addMember(team);
+    const id = await sendOk(v.actor, { kind: 'vacation', firstDay: '2027-05-12', lastDay: '2027-05-12' });
+    expect((await ownRecords(v.actor)).some((r) => String(r.id) === String(id)), 'ROW-130 control (server Los Angeles): the send is recorded').toBe(true);
+    await approve(team.admin, id);
+    expect((await calendarDatesFor(v.actor, 2027, 5, v.member.name)).length, 'ROW-130 control (server Los Angeles): the approved day is listed on some day of May 2027').toBeGreaterThan(0);
+  });
+});
+
+test('ROW-130.REQ-017.days-stay-put-with-the-server-process-in-los-angeles', async ({ browser }) => {
+  test.setTimeout(900_000);
+  await runUnderServerZone(browser, SERVER_ZONES[0]);
+});
+
+test('ROW-130.REQ-017.days-stay-put-with-the-server-process-in-auckland', async ({ browser }) => {
+  test.setTimeout(900_000);
+  await runUnderServerZone(browser, SERVER_ZONES[1]);
 });

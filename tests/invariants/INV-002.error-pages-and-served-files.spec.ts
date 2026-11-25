@@ -3,9 +3,27 @@
 //
 // Boundary (R6): what an address answers is HTTP behaviour, proved at the HTTP harness: every probe's status, headers
 // and body are read as a browser or a script would receive them. The leak signatures below are this file's own.
+// Slice 1, brief test-author-25 (owner grant A-053): ROW-226's server failures reached through the D-048 fault door
+// (doors-store.ts armFault) — each multi-record action made to fail part-way, its failure answer read for a stack, a
+// query, a path, the error's own text and any stored record (the whole store read through the store door as the
+// denominator). Every earlier case is kept as it was.
 import { test, expect, type APIRequestContext, type APIResponse } from '@playwright/test';
-import { anonymousApi, createMember, fresh, signInMember, type Actor, type Member } from './harness';
-import { disposeAll, freshTeam, isRuleRefusal, keep } from './robustness';
+import {
+  actWithToken,
+  anonymousApi,
+  approve,
+  createMember,
+  fresh,
+  freshPassword,
+  readEffect,
+  sendRequest,
+  signInMember,
+  type AccountId,
+  type Actor,
+  type Member,
+} from './harness';
+import { disposeAll, freshInt, freshTeam, isRuleRefusal, keep } from './robustness';
+import { armFault, everyStoredCell, FAULT_ACTIONS, type FaultAction } from './doors-store';
 
 test.afterEach(disposeAll);
 
@@ -201,5 +219,163 @@ test('ROW-229.INV-002.no-address-serves-database-config-env-backup-map-or-git', 
     }
   } finally {
     await api.dispose();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-226 — server failures, reached through the fault door (added, slice 1, brief test-author-25)
+// ---------------------------------------------------------------------------------------------------
+// ROW-226 promise: the row — error responses, INCLUDING SERVER FAILURES, never show a stack trace, query, file path or
+// ROW-226   any record; INV-002 (nothing reaches a browser but what is meant for it), REQ-006 (no other person's
+// ROW-226   requests). D-048/D-049: POST /api/__test/fault {at:"<action>:after-first-write"} makes the next such action
+// ROW-226   fail after its first write, before it commits — a real server failure inside a write transaction.
+// ROW-226 wrong product: a route whose catch answers createError({ statusCode: 500, message: err.message }) or sends
+// ROW-226   err.stack — the injected failure's own text ("… approve:after-first-write"), an SqliteError ("SQLITE_ERROR:
+// ROW-226   cannot commit — no transaction is active", "UPDATE requests SET …"), a frame "at faultPoint
+// ROW-226   (/app/.output/server/chunks/…mjs:12:9)" — or one that answers the failure with the record it was writing
+// ROW-226   (the account row with its email and password hash, the request row with its columns), or the new password
+// ROW-226   the body carried. None of the 27 malformed probes above reaches a 5xx, so they never see this.
+// ROW-226 given: today Mon 2027-03-08 in Pacific/Auckland; member M (signed in) with two pending vacations and an
+// ROW-226   approved sick range 3..12 March (days before and after today); member Q; member O (signed in) with a pending
+// ROW-226   vacation; decoy D, whom no action concerns. when: for each of the fault door's seven actions — approve,
+// ROW-226   reject, partial cancel, own password change, password set, allowance change, switch off — its first step is
+// ROW-226   read where it has one, the fault is armed on it, and the action is sent through its public route. then: the
+// ROW-226   answer is a failure (non-2xx: the fault was reached); its body and headers carry no stack frame, no source
+// ROW-226   file and line, no server path, no query or SQLite error text, not the fault's own name nor the words of an
+// ROW-226   injected fault, no stored-record keys (column names), no email of any account, not D's name, not the
+// ROW-226   passwords or the token the body carried, and no stored string value of the store at all (every cell of
+// ROW-226   every table holding a digit, an @ or a $ and at least 12 characters — hashes, emails, instants, session
+// ROW-226   hashes — display names and a value the asked address itself carries aside).
+// ROW-226 controls: ROW-226.control.an-armed-action-fails-and-the-same-action-unarmed-succeeds — the fault door is
+// ROW-226   reached (an armed approve answers a failure) and the action itself is sound (the same approve, unarmed,
+// ROW-226   succeeds), so the target's failure answers are the injected failure's, untouched by what they carry.
+// ROW-226 technique: every action the fault door names (FAULT_ACTIONS is the denominator, checked against the seven
+// ROW-226   driven here); the whole store as the record canary; the body's own secrets (new password, token) and the
+// ROW-226   neighbour D as decoys that must not appear.
+// ROW-226 cases: ROW-226 target=ROW-226.INV-002.server-failures-at-every-action-carry-no-stack-query-path-or-record control=ROW-226.control.an-armed-action-fails-and-the-same-action-unarmed-succeeds
+
+/** Column-like keys of a stored record, as a failure answer that dumps a row would carry them. */
+const RECORD_KEYS = /"(?:email|password|password_hash|pass_hash|hash|salt|first_day|last_day|account_id|person_id|decided_by|decided_at|cancel_from|cancelled_by|cancelled_at|from_value|to_value|starts_year|token_hash|session_hash|created_at|updated_at)"\s*:/i;
+/** The words of an injected fault, as its own error text would carry them. */
+const FAULT_TEXT = /after-first-write|faultPoint|\bfault(?:s|ed)?\b|\binjected\b|\barmed\b/i;
+
+interface FaultWorld {
+  admin: Actor;
+  m: Member;
+  mA: Actor;
+  q: Member;
+  o: Member;
+  d: Member;
+  adminEmail: string;
+  p1: AccountId;
+  p2: AccountId;
+  sick: AccountId;
+}
+
+async function faultWorld(): Promise<FaultWorld> {
+  const { install, admin } = await freshTeam();
+  const m = await createMember(admin);
+  const mA = keep(await signInMember(m));
+  const q = await createMember(admin);
+  const o = await createMember(admin);
+  const oA = keep(await signInMember(o));
+  const d = await createMember(admin);
+  const p1 = await sendRequest(mA, { kind: 'vacation', firstDay: '2027-04-05', lastDay: '2027-04-06' });
+  const p2 = await sendRequest(mA, { kind: 'vacation', firstDay: '2027-04-12', lastDay: '2027-04-13' });
+  const sick = await sendRequest(mA, { kind: 'sick', firstDay: '2027-03-03', lastDay: '2027-03-12' });
+  await approve(admin, sick);
+  await sendRequest(oA, { kind: 'vacation', firstDay: '2027-05-03', lastDay: '2027-05-04' });
+  return { admin, m, mA, q, o, d, adminEmail: install.admin.email, p1, p2, sick };
+}
+
+interface Step {
+  action: FaultAction;
+  /** Reads what the act needs (a token), and answers the act itself and the secrets its body carries. */
+  prepare: () => Promise<{ act: () => Promise<APIResponse>; secrets: string[] }>;
+}
+
+function steps(w: FaultWorld): Step[] {
+  const confirmed = (action: 'approve' | 'reject' | 'cancel' | 'switch-off', id: AccountId) => async () => {
+    const e = await readEffect(w.admin, action, id);
+    return { act: () => actWithToken(w.admin, action, id, e.token), secrets: [e.token] };
+  };
+  const route = (id: AccountId, what: string) => `/api/admin/accounts/${encodeURIComponent(String(id))}/${what}`;
+  return [
+    { action: 'approve', prepare: confirmed('approve', w.p1) },
+    { action: 'reject', prepare: confirmed('reject', w.p2) },
+    { action: 'partial-cancel', prepare: confirmed('cancel', w.sick) },
+    {
+      action: 'password-change',
+      prepare: async () => {
+        const next = freshPassword();
+        return { act: () => w.mA.api.post('/api/me/password', { data: { current: w.m.password, next } }), secrets: [w.m.password, next] };
+      },
+    },
+    {
+      action: 'password-set',
+      prepare: async () => {
+        const password = freshPassword();
+        return { act: () => w.admin.api.post(route(w.q.id, 'password'), { data: { password } }), secrets: [password] };
+      },
+    },
+    {
+      action: 'allowance-change',
+      prepare: async () => ({ act: () => w.admin.api.post(route(w.q.id, 'allowance'), { data: { allowance: freshInt(31, 59), startsNextYear: false } }), secrets: [] }),
+    },
+    { action: 'switch-off', prepare: confirmed('switch-off', w.o.id) },
+  ];
+}
+
+/** Every stored string value a failure answer must never carry: a digit, an @ or a $, at least 12 characters, display names aside. */
+async function storedSecrets(names: string[]): Promise<string[]> {
+  const out = new Set<string>();
+  for (const c of await everyStoredCell()) {
+    if (typeof c.value !== 'string') continue;
+    const v = c.value.trim();
+    if (v.length >= 12 && /[\d@$]/.test(v) && !names.includes(v)) out.add(v);
+  }
+  return [...out];
+}
+
+test('ROW-226.control.an-armed-action-fails-and-the-same-action-unarmed-succeeds', async () => {
+  const w = await faultWorld();
+  const e = await readEffect(w.admin, 'approve', w.p1);
+  await armFault('approve');
+  const failed = await actWithToken(w.admin, 'approve', w.p1, e.token);
+  expect(failed.ok(), `ROW-226 control: the armed approve answers a failure (answered ${failed.status()})`).toBe(false);
+  await approve(w.admin, w.p1);
+});
+
+test('ROW-226.INV-002.server-failures-at-every-action-carry-no-stack-query-path-or-record', async () => {
+  test.setTimeout(300_000);
+  const w = await faultWorld();
+  const all = steps(w);
+  expect([...all.map((x) => x.action)].sort(), "ROW-226: every action the fault door names is driven").toEqual([...FAULT_ACTIONS].sort());
+  const people = [w.m, w.q, w.o, w.d];
+  const names = [w.admin.me.name, ...people.map((p) => p.name)];
+  const emails = [w.adminEmail, ...people.map((p) => p.email)].map((x) => x.toLowerCase());
+  const stored = await storedSecrets(names);
+  expect(stored.length, 'ROW-226: the store holds values to leak (emails, hashes, instants)').toBeGreaterThan(0);
+  for (const step of all) {
+    const { act, secrets } = await step.prepare();
+    const at = await armFault(step.action);
+    const res = await act();
+    const body = await res.text().catch(() => '');
+    const heads = res.headersArray().map((h) => `${h.name}: ${h.value}`).join('\n');
+    const text = `${heads}\n${body}`;
+    const low = text.toLowerCase();
+    const where = `${step.action} under the fault ${at} (${res.status()})`;
+    expect.soft(res.ok(), `ROW-226 ${where}: the armed fault was reached — the action answers a failure`).toBe(false);
+    expect.soft(STACK.exec(text)?.[0] ?? null, `ROW-226 ${where}: no stack trace`).toBeNull();
+    expect.soft(PATH.exec(text)?.[0] ?? null, `ROW-226 ${where}: no file path`).toBeNull();
+    expect.soft(QUERY.exec(text)?.[0] ?? null, `ROW-226 ${where}: no query or SQLite error text`).toBeNull();
+    expect.soft(low.includes(at.toLowerCase()) ? at : FAULT_TEXT.exec(text)?.[0] ?? null, `ROW-226 ${where}: not the injected failure's own text (err.message)`).toBeNull();
+    expect.soft(RECORD_KEYS.exec(body)?.[0] ?? null, `ROW-226 ${where}: no stored record's keys`).toBeNull();
+    expect.soft(emails.filter((x) => low.includes(x)), `ROW-226 ${where}: no account's email`).toEqual([]);
+    expect.soft(text.includes(w.d.name), `ROW-226 ${where}: not D's name`).toBe(false);
+    expect.soft(secrets.filter((x) => text.includes(x)), `ROW-226 ${where}: not the password or token its body carried`).toEqual([]);
+    // A stored value that is also in the address asked (an opaque id in the route) is the caller's own, not a leak.
+    const asked = decodeURIComponent(res.url());
+    expect.soft(stored.filter((x) => text.includes(x) && !asked.includes(x)).slice(0, 3), `ROW-226 ${where}: no stored value of the store`).toEqual([]);
   }
 });

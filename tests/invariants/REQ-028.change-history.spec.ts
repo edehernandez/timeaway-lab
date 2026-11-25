@@ -9,7 +9,11 @@
 // Slice 1, brief test-author-11: at the end, ROW-268's case reading D-043's own fields (from, to, by, at) so a swapped
 // entry fails, and ROW-269's cases probing every member route and page for the entries' facts (values, starting year,
 // who, when), not only the earlier names; every earlier assertion kept.
-import { test, expect, type Page, type Response } from '@playwright/test';
+// Slice 1, brief test-author-25 (owner grant A-053, lesson L-1): the entries read on the person page itself
+// (/admin/people/:id, where A-045 puts the history), entry by entry, for ROW-268 and its siblings ROW-267 and ROW-274,
+// beside the API readings above; these cases make their own install and come last in the file.
+import { test, expect, type Browser, type Page, type Response } from '@playwright/test';
+import { datePatterns, findRows, literal, type FoundRow } from './page-reading';
 import {
   anonymousApi,
   createMember,
@@ -667,5 +671,249 @@ test('ROW-269.REQ-028.no-member-route-or-page-carries-the-history-entries', asyn
   } finally {
     await subject.dispose();
     await neighbour.dispose();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// The history as the person page draws it (added, slice 1, brief test-author-25; lesson L-1). Its own install, made
+// after every case above has read the shared world, so it comes last in the file.
+// ---------------------------------------------------------------------------------------------------
+//
+// Readings, stated once: an entry's ROW on the page is found by page-reading.ts findRows from the day the change was
+// made, as the page draws it in English (each change made on its own day, so the day is the entry's own key): the
+// innermost drawn element carrying that day, widened to the largest ancestor carrying no other change's day. Its TEXT
+// is its innerText, whitespace collapsed. A name is matched as a whole name, a number as a whole number. The changes
+// are made after 13:00 Auckland time, so the team's date and the UTC date agree (the browser zone is the container's
+// UTC): a page formatting a date through the browser's zone is ROW-138's harm, not these rows'.
+
+interface DrawnChange {
+  key: string;
+  kind: 'rename' | 'allowance';
+  from: string | number;
+  to: string | number;
+  /** The team day it was made on (its key on the page) and its instant. */
+  day: string;
+  at: string;
+  startsYear?: number;
+}
+
+interface PageWorld {
+  install: Install;
+  admin: Actor;
+  subject: Member;
+  names: { n0: string; n1: string; n2: string; otherNew: string };
+  allowances: { a0: number; a1: number; a2: number; otherNew: number };
+  changes: DrawnChange[];
+  /** The neighbour's change day, drawn on nobody's page but the neighbour's. */
+  otherDay: string;
+  api: { status: number; records: Rec[] | null; text: string };
+  page: { status: number; rows: FoundRow[]; body: string };
+}
+
+let pw: PageWorld;
+let pageBuilt: Promise<PageWorld> | null = null;
+
+async function pageWorld(browser: Browser): Promise<PageWorld> {
+  pageBuilt ??= buildPageWorld(browser);
+  pw = await pageBuilt;
+  return pw;
+}
+
+async function buildPageWorld(browser: Browser): Promise<PageWorld> {
+  const install = await resetProduct({ now: teamInstant(ZONE, '2027-03-01', '09:00'), timeZone: ZONE });
+  const admin = await signIn(install.admin);
+  const a0 = freshInt(120, 139);
+  const a1 = freshInt(140, 159);
+  const a2 = freshInt(160, 179);
+  const otherAllowance = freshInt(180, 199);
+  const n0 = freshName('Ilse');
+  const n1 = freshName('Greta');
+  const n2 = freshName('Hanna');
+  const otherNew = freshName('Wanda');
+  const subject = await createMember(admin, { name: n0, allowance: a0 });
+  const other = await createMember(admin, { name: freshName('Oskar') });
+
+  const changes: DrawnChange[] = [
+    { key: 'rename N0 to N1', kind: 'rename', from: n0, to: n1, day: '2027-03-08', at: teamInstant(ZONE, '2027-03-08', '14:17') },
+    { key: 'rename N1 to N2', kind: 'rename', from: n1, to: n2, day: '2027-03-10', at: teamInstant(ZONE, '2027-03-10', '15:34') },
+    { key: 'allowance A0 to A2 from next year', kind: 'allowance', from: a0, to: a2, day: '2027-03-15', at: teamInstant(ZONE, '2027-03-15', '16:05'), startsYear: THIS_YEAR + 1 },
+    { key: 'allowance A0 to A1 from this year', kind: 'allowance', from: a0, to: a1, day: '2027-03-19', at: teamInstant(ZONE, '2027-03-19', '17:46'), startsYear: THIS_YEAR },
+  ];
+  const otherDay = '2027-03-17';
+  for (const c of changes) {
+    if (c.day === '2027-03-19') {
+      // the neighbour's changes, on a day of their own, before the last of the subject's
+      await setClock(teamInstant(ZONE, otherDay, '16:30'));
+      await rename(admin, other.id, otherNew);
+      await setAllowance(admin, other.id, otherAllowance);
+    }
+    await setClock(c.at);
+    if (c.kind === 'rename') await rename(admin, subject.id, String(c.to));
+    else await setAllowance(admin, subject.id, Number(c.to), { startsNextYear: c.startsYear === THIS_YEAR + 1 });
+  }
+  await setClock(teamInstant(ZONE, '2027-03-22', '14:00'));
+  const api = await readHistory(admin.api, subject.id);
+
+  const opened = await openPage(browser, admin);
+  let page: PageWorld['page'];
+  try {
+    const response = await opened.page.goto(PAGES.adminPerson(subject.id));
+    await opened.page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    const specs = changes.map((c) => ({ key: c.key, keys: [datePatterns(c.day)] }));
+    let rows: FoundRow[] = [];
+    await expect
+      .poll(async () => (rows = await findRows(opened.page, specs)).filter((r) => r.found).length, { timeout: 15_000 })
+      .toBe(specs.length)
+      .catch(() => undefined);
+    const body = (await opened.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+    page = { status: response?.status() ?? 0, rows, body };
+  } finally {
+    await opened.close();
+  }
+  return {
+    install,
+    admin,
+    subject,
+    names: { n0, n1, n2, otherNew },
+    allowances: { a0, a1, a2, otherNew: otherAllowance },
+    changes,
+    otherDay,
+    api,
+    page,
+  };
+}
+
+test.afterAll(async () => {
+  await pw?.admin.dispose().catch(() => undefined);
+});
+
+function drawnRow(c: DrawnChange): FoundRow | undefined {
+  return pw.page.rows.find((r) => r.key === c.key);
+}
+
+function rowText(r: FoundRow | undefined): string {
+  return (r?.text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/** Where a value is first drawn in `text`: a name as a whole name, a number as a whole number of its own; -1 when it is not. */
+function drawnAt(text: string, v: string | number): number {
+  const src = typeof v === 'number' ? `(?<![\\w.,])${v}(?![\\w])` : `(?<![\\w])${literal(v)}(?![\\w])`;
+  const m = new RegExp(src).exec(text);
+  return m ? m.index : -1;
+}
+
+/** The old value is drawn as the old one: before the new value in reading order, or right after an old-value word. */
+function oldThenNew(text: string, from: string | number, to: string | number): boolean {
+  const f = drawnAt(text, from);
+  const t = drawnAt(text, to);
+  if (f < 0 || t < 0) return false;
+  if (f < t) return true;
+  const oldWord = new RegExp(`\\b(?:from|old|was|before|previous(?:ly)?)\\b[^\\d]{0,25}${literal(String(from))}(?![\\w])`, 'i');
+  const newWord = new RegExp(`\\b(?:to|new|now|after)\\b[^\\d]{0,25}${literal(String(to))}(?![\\w])`, 'i');
+  return oldWord.test(text) && newWord.test(text);
+}
+
+/** `text` with every English rendering of `day` removed, together with a year written right after it. */
+function withoutDay(text: string, day: string): string {
+  let out = text;
+  for (const src of datePatterns(day)) out = out.replace(new RegExp(`${src}(?:,?\\s*\\d{4}(?!\\d))?`, 'gi'), ' ');
+  return out;
+}
+
+// ROW-268 promise: REQ-028 "On a person's requests page the admin sees that person's allowance and name change history,
+// ROW-268   each change with its old and new value …, who made it and when"; fail-if (2) "a listed change lacks its old
+// ROW-268   value, new value, who or when"; A-045 (the admin sees the history on that person's requests page).
+// ROW-268 wrong product: a person page that re-draws the right API entries wrongly — the old and new value swapped
+// ROW-268   ("Greta → Ilse" for the rename of Ilse to Greta, "a2 → a0" for a change from a0 to a2), only the new value
+// ROW-268   ("renamed to Greta"), no author, or every entry stamped with the latest change's time or the time of the
+// ROW-268   read (the right when on the wrong items) — while GET …/history stays right, so the API cases above stay green.
+// ROW-268 given: Pacific/Auckland; the subject made on 1 Mar 2027 as N0 with allowance A0 (fresh); the admin (fresh
+// ROW-268   name) renames N0 → N1 on Mon 8 Mar, N1 → N2 on Wed 10 Mar, sets A2 from next year on Mon 15 Mar and A1 from
+// ROW-268   this year on Fri 19 Mar, each after 13:00; a neighbour is renamed and given a fresh allowance on Wed 17 Mar.
+// ROW-268   when: on Mon 22 Mar the admin opens the subject's page /admin/people/:id in the browser. then: each change's
+// ROW-268   entry (found by the day it was made) is drawn once, carries no other change's day, draws its old value as
+// ROW-268   the old one (before the new value, or after an old-value word: from, old, was) and its new value, and the
+// ROW-268   admin's name.
+// ROW-268 controls: ROW-268.control.the-person-page-answers-and-the-history-holds-the-four-changes — the page answers
+// ROW-268   200 drawing the subject's current name N2, and the API history lists the four changes by their new values:
+// ROW-268   the setup worked and the page is reached, whatever the page draws of the history.
+// ROW-268 technique: per entry, on the entry's own drawn row (never "somewhere on the page"); the swapped entry as the
+// ROW-268   near miss; each change on its own day so a when on the wrong entry is seen; fresh names and numbers.
+// ROW-268 cases: ROW-268 target=ROW-268.REQ-028.each-entry-drawn-on-the-person-page-shows-old-then-new-who-and-when control=ROW-268.control.the-person-page-answers-and-the-history-holds-the-four-changes
+test('ROW-268.control.the-person-page-answers-and-the-history-holds-the-four-changes', async ({ browser }) => {
+  await pageWorld(browser);
+  expect(pw.page.status, 'ROW-268 control: the person page answers the admin').toBe(200);
+  expect(drawnAt(pw.page.body, pw.names.n2), "ROW-268 control: the person page draws the subject's current name N2").toBeGreaterThanOrEqual(0);
+  const entries = entriesIn(pw.api.text) ?? [];
+  for (const c of pw.changes) {
+    expect(entries.filter((e) => fieldIs(e.to, c.to)).length, `ROW-268 control: the API history lists the ${c.key} — ${pw.api.text.slice(0, 400)}`).toBe(1);
+  }
+});
+
+test('ROW-268.REQ-028.each-entry-drawn-on-the-person-page-shows-old-then-new-who-and-when', async ({ browser }) => {
+  await pageWorld(browser);
+  for (const c of pw.changes) {
+    const r = drawnRow(c);
+    const text = rowText(r);
+    const say = `ROW-268 the ${c.key} (made ${c.day}) on the person page`;
+    expect.soft(r?.found, `${say}: its entry is drawn — the page draws: ${JSON.stringify(pw.page.body.slice(0, 1500))}`).toBe(true);
+    if (!r?.found) continue;
+    expect.soft(r.repeated, `${say}: drawn in one place`).toBe(false);
+    for (const o of pw.changes.filter((x) => x !== c)) {
+      expect.soft(datePatterns(o.day).some((src) => new RegExp(src, 'i').test(text)), `${say}: carries no other change's day (${o.day}) — "${text}"`).toBe(false);
+    }
+    expect.soft(drawnAt(text, c.to), `${say}: draws its new value ${JSON.stringify(c.to)} — "${text}"`).toBeGreaterThanOrEqual(0);
+    expect.soft(drawnAt(text, c.from), `${say}: draws its old value ${JSON.stringify(c.from)} — "${text}"`).toBeGreaterThanOrEqual(0);
+    expect.soft(oldThenNew(text, c.from, c.to), `${say}: draws ${JSON.stringify(c.from)} as the old value and ${JSON.stringify(c.to)} as the new one, never the other way — "${text}"`).toBe(true);
+    expect.soft(drawnAt(text, pw.install.admin.name), `${say}: draws who made it ("${pw.install.admin.name}") — "${text}"`).toBeGreaterThanOrEqual(0);
+  }
+});
+
+// ROW-267 promise: REQ-028 fail-if (1) "an allowance or name change is missing from the history"; A-045 (the admin sees
+// ROW-267   each person's change history on that person's requests page).
+// ROW-267 wrong product: a person page that draws only the latest rename, or the renames and not the allowance changes,
+// ROW-267   or loses the next-year change once a this-year change follows, or draws everybody's changes on each person —
+// ROW-267   while the API history the cases above read stays whole.
+// ROW-267 given: the world of the ROW-268 page case (four changes of the subject on 8, 10, 15 and 19 Mar 2027; the
+// ROW-267   neighbour's rename and allowance on 17 Mar). when: the admin opens the subject's page. then: an entry is drawn
+// ROW-267   for each of the four, carrying its new value; the page draws neither the neighbour's new name, nor its new
+// ROW-267   allowance, nor the neighbour's change day.
+// ROW-267 controls: ROW-268.control.the-person-page-answers-and-the-history-holds-the-four-changes — the page is reached
+// ROW-267   and the four changes exist in the API history.
+// ROW-267 technique: two changes of each kind in sequence (the second must not replace the first), each on its own day,
+// ROW-267   and the neighbour as the decoy that must not be drawn.
+// ROW-267 cases: ROW-267 target=ROW-267.REQ-028.every-change-is-drawn-on-the-person-page control=ROW-268.control.the-person-page-answers-and-the-history-holds-the-four-changes
+test('ROW-267.REQ-028.every-change-is-drawn-on-the-person-page', async ({ browser }) => {
+  await pageWorld(browser);
+  for (const c of pw.changes) {
+    const r = drawnRow(c);
+    expect.soft(r?.found, `ROW-267: the ${c.key} (made ${c.day}) is drawn on the person page — the page draws: ${JSON.stringify(pw.page.body.slice(0, 1500))}`).toBe(true);
+    if (r?.found) expect.soft(drawnAt(rowText(r), c.to), `ROW-267: its entry carries the new value ${JSON.stringify(c.to)} — "${rowText(r)}"`).toBeGreaterThanOrEqual(0);
+  }
+  expect.soft(drawnAt(pw.page.body, pw.names.otherNew), "ROW-267: the neighbour's rename is not drawn on the subject's page").toBe(-1);
+  expect.soft(drawnAt(pw.page.body, pw.allowances.otherNew), "ROW-267: the neighbour's new allowance is not drawn on the subject's page").toBe(-1);
+  expect.soft(datePatterns(pw.otherDay).some((src) => new RegExp(src, 'i').test(pw.page.body)), "ROW-267: the neighbour's change day is not drawn on the subject's page").toBe(false);
+});
+
+// ROW-274 promise: REQ-028 fail-if (4) "a listed allowance change lacks the year it starts"; REQ-028 "for allowances
+// ROW-274   the year it starts", on the person's requests page.
+// ROW-274 wrong product: a person page whose allowance entries draw the value and the date but not the starting year,
+// ROW-274   or a starting year read off the change's own date (2027 for both), while the API's startsYear is right.
+// ROW-274 given: the world of the ROW-268 page case: A2 from next year (2028) set on 15 Mar 2027, A1 from this year
+// ROW-274   (2027) set on 19 Mar 2027. when: the admin opens the subject's page. then: with the change's own drawn date
+// ROW-274   (and a year written right after it) removed, A2's entry still draws 2028 and A1's entry still draws 2027.
+// ROW-274 controls: ROW-268.control.the-person-page-answers-and-the-history-holds-the-four-changes — the page is reached
+// ROW-274   and both allowance changes exist in the API history.
+// ROW-274 technique: both sides of "starts" made in the same year, so a year taken from the date is wrong for one; the
+// ROW-274   date's own year removed before the year is looked for, so a date never counts as the starting year.
+// ROW-274 cases: ROW-274 target=ROW-274.REQ-028.each-allowance-entry-drawn-on-the-person-page-shows-the-year-it-starts control=ROW-268.control.the-person-page-answers-and-the-history-holds-the-four-changes
+test('ROW-274.REQ-028.each-allowance-entry-drawn-on-the-person-page-shows-the-year-it-starts', async ({ browser }) => {
+  await pageWorld(browser);
+  for (const c of pw.changes.filter((x) => x.startsYear !== undefined)) {
+    const r = drawnRow(c);
+    expect.soft(r?.found, `ROW-274: the ${c.key} (made ${c.day}) is drawn on the person page`).toBe(true);
+    if (!r?.found) continue;
+    const rest = withoutDay(rowText(r), c.day);
+    expect.soft(drawnAt(rest, c.startsYear as number), `ROW-274: the ${c.key} draws the year it starts, ${c.startsYear}, apart from its date — "${rowText(r)}"`).toBeGreaterThanOrEqual(0);
   }
 });
