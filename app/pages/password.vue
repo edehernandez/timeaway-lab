@@ -43,7 +43,7 @@ async function submit() {
   <section>
     <h1>{{ forced ? 'Choose your own password' : 'Change your password' }}</h1>
     <p v-if="forced">The admin set your password. Choose your own before you go on; it must differ from the one the admin gave you.</p>
-    <form @submit.prevent="submit">
+    <form method="post" @submit.prevent="submit">
       <p>
         <label for="pw-current">{{ forced ? 'Password the admin gave you' : 'Current password' }}</label>
         <input id="pw-current" v-model="current" type="password" autocomplete="current-password" required>
