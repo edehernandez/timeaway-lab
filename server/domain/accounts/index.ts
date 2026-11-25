@@ -14,6 +14,7 @@ export {
   personHistory,
   personOf,
   renameAccount,
+  requireLiveIn,
   resetForTest,
   setAllowance,
   setPassword,
