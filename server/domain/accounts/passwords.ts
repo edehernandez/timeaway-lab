@@ -1,6 +1,6 @@
 // Purpose: password storage and checking (D-004, D-014, REQ-015) — scrypt hashes from node:crypto with a random salt
 // per hash, compared in constant time; a password is kept exactly as typed (no trimming, no Unicode folding).
-import { randomBytes, scrypt, timingSafeEqual, type ScryptOptions } from 'node:crypto'
+import { randomBytes, scrypt, scryptSync, timingSafeEqual, type ScryptOptions } from 'node:crypto'
 
 // scrypt parameters (RFC 7914): N=2^15, r=8, p=1, a 32-byte key and a 16-byte salt (D-004, D-032).
 const N = 32768
@@ -19,6 +19,16 @@ function derive(password: string, salt: Buffer, opts: ScryptOptions, keylen: num
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16)
   const key = await derive(password, salt, OPTIONS, KEYLEN)
+  return ['scrypt', N, R, P, salt.toString('base64url'), key.toString('base64url')].join('$')
+}
+
+/**
+ * The same stored form as hashPassword, worked out synchronously: for the one-time setup command (D-011), which runs
+ * to its end before the built server would start listening (see startup.ts), so it cannot wait on a callback.
+ */
+export function hashPasswordSync(password: string): string {
+  const salt = randomBytes(16)
+  const key = scryptSync(Buffer.from(password, 'utf8'), salt, KEYLEN, OPTIONS)
   return ['scrypt', N, R, P, salt.toString('base64url'), key.toString('base64url')].join('$')
 }
 

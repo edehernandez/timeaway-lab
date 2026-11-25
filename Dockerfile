@@ -15,6 +15,9 @@ ENV NODE_ENV=production PORT=3000 HOST=0.0.0.0 \
     TIMEAWAY_DB=/data/timeaway.sqlite TIMEAWAY_MIGRATIONS=/app/server/db/migrations
 COPY --from=build /src/.output ./.output
 COPY --from=build /src/server/db/migrations ./server/db/migrations
+# The one-time setup command (D-011) and the start command's supervisor (D-048): it starts the built server, starts
+# it again when it ends, and keeps its output lines for the test harness's log door.
+COPY --from=build /src/server/scripts ./server/scripts
 RUN mkdir -p /data
 EXPOSE 3000
-CMD ["node", ".output/server/index.mjs"]
+CMD ["node", "server/scripts/supervise.mjs"]

@@ -37,10 +37,15 @@ export function requestIdFrom(param: string | undefined): number {
 // The state machine (RULE-004): every change of a request's state goes through transition()
 // ---------------------------------------------------------------------------------------------------
 
-/** A request row read inside the write transaction that will change it. */
+/**
+ * A request row read inside the write transaction that will change it, and the fields its state change writes in the
+ * same statement (who decided or cancelled it and when): the store holds every record rule on each row it writes
+ * (server/db/migrations/0004_request_record_rules.sql, ROW-198), so a state and its record land together.
+ */
 export interface Live {
   tx: Tx
   row: RequestRow
+  also?: Partial<Pick<RequestRow, 'decidedAt' | 'decidedBy' | 'rejectionNote' | 'cancelledAt' | 'cancelledBy' | 'cancelFrom'>>
 }
 
 /**
@@ -50,7 +55,7 @@ export interface Live {
 export function transition(req: Live, from: RequestState, to: RequestState): void {
   const done = req.tx
     .update(requests)
-    .set({ state: to })
+    .set({ ...req.also, state: to })
     .where(and(eq(requests.id, req.row.id), eq(requests.state, from)))
     .run()
   if (done.changes !== 1) refuse(409, 'This request was changed meanwhile. Reload the page and try again.')
@@ -272,9 +277,8 @@ export function cancelOwnForViewer(viewer: Actor, idParam: string | undefined): 
     if (weekdaysIn(row.firstDay, row.lastDay).some((d) => d < today)) {
       refuse(409, 'This request has a weekday before today, so you can no longer cancel it: the admin decides it.')
     }
-    const live: Live = { tx, row }
+    const live: Live = { tx, row, also: { cancelledAt: nowIso(), cancelledBy: viewer.id } }
     transition(live, 'pending', 'cancelled')
-    tx.update(requests).set({ cancelledAt: nowIso(), cancelledBy: viewer.id }).where(eq(requests.id, row.id)).run()
   })
   return { ok: true }
 }
