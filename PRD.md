@@ -524,3 +524,33 @@ A-052 | human | 2026-11-25 | Q: must the renewal of the session identifier at si
 ```
 
 review: delta, round 1, 0 findings
+
+### 2026-11-25 (held rows rulings)
+
+VID-QUESTION: (OQ-12) When two display names are compared for uniqueness, should invisible characters (zero-width space, word joiner and the like) be ignored, as letter case and surrounding spaces already are, so "Ana" and "Ana" followed by a zero-width space cannot both be switched on?
+
+```vid-prd-answers
+A-053 | human | 2026-11-25 | Q: five rows whose tests fell short twice — ROW-130 and ROW-158 (time zones), ROW-206 (refusals), ROW-226 (error answers) and ROW-268 (the change history) — narrow them, give them one more test round, or record known limits? | A: one more test round each, as recommended | settles: REQ-013 | unchanged: REQ-001, REQ-006, REQ-013, REQ-017, REQ-028, INV-001
+A-054 | human | 2026-11-25 | Q: must setup refuse a fixed-offset zone name such as Etc/GMT+5, which never changes for daylight saving? | A: yes, refuse it; the team's zone is UTC-6 in Central America, entered by its named zone (for example America/Guatemala or America/Costa_Rica) | settles: CON-003 | unchanged: CON-003
+A-055 | human | 2026-11-25 | Q: must every days-left and forecast figure on the admin's person page and in the approve confirmation also name its year? | A: yes, as recommended | settles: REQ-007 | unchanged: REQ-007, REQ-008, REQ-021, REQ-022, REQ-025
+A-056 | human | 2026-11-25 | Q: is a name made only of invisible characters (zero-width space, word joiner) a blank name to refuse? | A: yes, refuse it, as recommended | settles: REQ-013 | unchanged: REQ-013, REQ-020, REQ-023
+A-057 | human | 2026-11-25 | Q: must a page served from another port of the same machine be unable to make changes as the signed-in person? | A: no — a known limit, as recommended, for the owner's personal use with controlled access; only other sites are blocked | settles: INV-003 | unchanged: INV-003, REQ-014
+```
+
+```vid-prd-findings
+F-134 | review | advisory | A-055, REQ-021, REQ-025, REQ-022 | repaired | evidence: round 1 — the person page and confirmation surfaces belong to REQ-021, REQ-025 and REQ-022; repaired: unchanged names them, and ROW-159 cites REQ-021 and REQ-025
+F-135 | review | advisory | A-053 | repaired | evidence: round 1 — the held rows were not named and ROW-158's items were missing; repaired: the question names the five rows and unchanged adds REQ-001 and INV-001
+F-136 | review | advisory | A-054, CON-003 | repaired | evidence: round 1 — the class of fixed-offset names is wider than the example; repaired at the row: ROW-136 refuses every fixed-offset zone name, the Etc/ zones, UTC, GMT and the legacy fixed names EST, MST and HST included
+F-137 | review | advisory | A-056, REQ-024 | routed OQ-12 | evidence: round 1 — invisible characters can make two names look alike on the calendar while REQ-024 compares only case and surrounding spaces; a product question, raised as OQ-12
+F-138 | review | advisory | A-057, INV-003 | repaired | evidence: round 1 — "another site" in browser terms leaves sibling subdomains out; repaired at the row: no change from any origin other than the product's own, except a page on another port of the same host
+F-139 | review | blocking | INVENTORY.md:ROW-136, A-054 | repaired | evidence: round 2 — read by behaviour, the fixed-offset class would refuse the team's own zone (America/Guatemala and America/Costa_Rica have no daylight saving); repaired: ROW-136 refuses by name and accepts a named geographic zone whether or not it observes daylight saving, America/Guatemala and America/Costa_Rica included
+F-140 | review | advisory | INVENTORY.md:ROW-216, A-056, REQ-013 | repaired | evidence: round 2 — ROW-216 carries the create half but cited only REQ-020; repaired: it cites REQ-013 too
+F-141 | review | advisory | INVENTORY.md:ROW-216, A-056 | repaired | evidence: round 2 — a mix of spaces and invisible characters read as neither; repaired: blank is made only of spaces and invisible characters, in any mix
+F-142 | review | advisory | INVENTORY.md:ROW-136, INVENTORY.md:ROW-159, INVENTORY.md:ROW-216, INVENTORY.md:ROW-222 | repaired | evidence: round 2 — the four reworded rows keep stamps from tests of the older words; repaired: their amendment resets their verdicts, a test-author round adds the new arms' cases, and each is seen red again before its stamp moves
+F-143 | review | blocking | INVENTORY.md:ROW-136, CON-003 | repaired | evidence: round 3 — F-139's insertion moved "or a silent default" beside the accepted zones; repaired: the clause stands beside never a fixed offset again, every other clause word for word
+F-144 | review | advisory | INVENTORY.md:ROW-159, REQ-022, INV-001 | repaired | evidence: round 3 — the row's labelling is REQ-022's and INV-001's; repaired: ROW-159 cites both
+F-145 | review | advisory | INVENTORY.md:ROW-216, A-056, REQ-023 | repaired | evidence: round 3 — the rename half breaks REQ-023 arm 1; repaired: A-056 lists REQ-023 unchanged and ROW-216 cites it
+F-146 | review | advisory | A-057, REQ-014, INVENTORY.md:ROW-222 | repaired | evidence: round 3 — the known limit bears on REQ-014 arm 1 too; repaired: A-057 lists REQ-014 unchanged
+```
+
+review: delta, round 3, 13 findings
