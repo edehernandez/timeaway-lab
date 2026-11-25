@@ -138,7 +138,11 @@ export function allowanceChangesOf(accountId: number): { allowance: number; star
  * latest starting year, and among those the most recently made. Null when no change starts by then.
  */
 export function allowanceFor(accountId: number, year: number): number | null {
-  const row = db()
+  return allowanceIn(db(), accountId, year)
+}
+
+function allowanceIn(tx: Tx, accountId: number, year: number): number | null {
+  const row = tx
     .select()
     .from(accountAllowances)
     .where(and(eq(accountAllowances.accountId, accountId), lte(accountAllowances.startsYear, year)))
@@ -181,10 +185,30 @@ export function personOf(id: number): ReturnType<typeof listPeople>[number] {
   return person
 }
 
-/** Who changed what and when on an account (ARCHITECTURE.md accounts: "records who changed what and when"). */
-export function personHistory(id: number): { at: string; by: string | null; what: string; from: string | null; to: string | null }[] {
+/** One entry of a person's change history (REQ-028): a rename, or an allowance change with the year it starts. */
+export type HistoryEntry =
+  | { at: string; by: string | null; what: 'renamed'; from: string | null; to: string | null }
+  | { at: string; by: string | null; what: 'allowance set'; from: number | null; to: number | null; startsYear: number | null }
+
+const HISTORY_KINDS = ['renamed', 'allowance set'] as const
+
+function wholeOrNull(v: string | null): number | null {
+  return v !== null && /^[0-9]+$/.test(v) ? Number(v) : null
+}
+
+/**
+ * REQ-028, REQ-018, D-043: a person's allowance and name change history, newest first — each change with its old and
+ * new value, for an allowance the year it starts, who made it and when. The other recorded changes (password, email,
+ * switching) are kept with who and when (REQ-018) but are not this history's.
+ */
+export function personHistory(id: number): HistoryEntry[] {
   personOf(id)
-  const rows = db().select().from(accountEvents).where(eq(accountEvents.accountId, id)).orderBy(asc(accountEvents.id)).all()
+  const rows = db()
+    .select()
+    .from(accountEvents)
+    .where(and(eq(accountEvents.accountId, id), inArray(accountEvents.what, [...HISTORY_KINDS])))
+    .orderBy(desc(accountEvents.id))
+    .all()
   const ids = [...new Set(rows.map((r) => r.byAccountId).filter((x): x is number => x !== null))]
   const names = new Map(
     (ids.length ? db().select({ id: accounts.id, name: accounts.name }).from(accounts).where(inArray(accounts.id, ids)).all() : []).map((r) => [
@@ -192,21 +216,29 @@ export function personHistory(id: number): { at: string; by: string | null; what
       r.name,
     ]),
   )
-  return rows.map((r) => ({
-    at: r.at,
-    by: r.byAccountId === null ? null : (names.get(r.byAccountId) ?? null),
-    what: r.what,
-    from: r.fromValue,
-    to: r.toValue,
-  }))
+  return rows.map((r): HistoryEntry => {
+    const by = r.byAccountId === null ? null : (names.get(r.byAccountId) ?? null)
+    if (r.what === 'allowance set') {
+      return { at: r.at, by, what: 'allowance set', from: wholeOrNull(r.fromValue), to: wholeOrNull(r.toValue), startsYear: r.startsYear }
+    }
+    return { at: r.at, by, what: 'renamed', from: r.fromValue, to: r.toValue }
+  })
 }
 
 // ---------------------------------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------------------------------
 
-function record(tx: Tx, accountId: number, by: number | null, what: string, from: string | null = null, to: string | null = null): void {
-  tx.insert(accountEvents).values({ accountId, byAccountId: by, at: nowIso(), what, fromValue: from, toValue: to }).run()
+function record(
+  tx: Tx,
+  accountId: number,
+  by: number | null,
+  what: string,
+  from: string | null = null,
+  to: string | null = null,
+  startsYear: number | null = null,
+): void {
+  tx.insert(accountEvents).values({ accountId, byAccountId: by, at: nowIso(), what, fromValue: from, toValue: to, startsYear }).run()
 }
 
 /** Runs a write transaction, turning a store constraint failure into a plain 409 refusal. */
@@ -350,7 +382,8 @@ export async function changeOwnPassword(who: Actor, body: unknown): Promise<void
 
 /**
  * REQ-011, D-025: the admin sets an account's allowance, starting this year or, with startsNextYear, next year; it is
- * kept as a change with the year it starts from, never by rewriting earlier years.
+ * kept as a change with the year it starts from, never by rewriting earlier years. REQ-018 arms 2 and 4, D-043: the
+ * change is recorded with its old value (the allowance its starting year had before), its new value and that year.
  */
 export function setAllowance(by: Actor, id: number, body: unknown): void {
   const f = fieldsOf(body)
@@ -359,8 +392,9 @@ export function setAllowance(by: Actor, id: number, body: unknown): void {
   const startsYear = teamYear() + (f.startsNextYear === true ? 1 : 0)
   write((tx) => {
     if (!accountById(tx, id)) refuse(404, 'There is no such account.')
+    const old = allowanceIn(tx, id, startsYear)
     tx.insert(accountAllowances).values({ accountId: id, allowance, startsYear, madeAt: nowIso(), madeBy: by.id }).run()
-    record(tx, id, by.id, 'allowance set', null, `${allowance} days from ${startsYear}`)
+    record(tx, id, by.id, 'allowance set', old === null ? null : String(old), String(allowance), startsYear)
   }, 'The allowance could not be set.')
 }
 

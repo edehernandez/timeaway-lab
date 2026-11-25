@@ -10,13 +10,16 @@ interface Person {
   isAdmin: boolean
   switchedOn: boolean
   allowance: number | null
+  years?: { year: number; allowance: number | null; daysLeft: number; pending: number }[]
 }
+// REQ-028, D-043: a rename, or an allowance change with the year it starts, newest first.
 interface Change {
   at: string
   by: string | null
   what: string
-  from: string | null
-  to: string | null
+  from: string | number | null
+  to: string | number | null
+  startsYear?: number | null
 }
 
 interface PersonRequest {
@@ -158,7 +161,8 @@ function saveAllowance() {
   <section v-if="person">
     <h1>{{ person.name }}</h1>
     <p>{{ person.email }} · {{ person.switchedOn ? 'Switched on' : 'Switched off' }}<span v-if="person.isAdmin"> · the admin</span></p>
-    <p>Allowance this year: {{ person.allowance ?? '–' }} days</p>
+    <p v-if="!person.years">Allowance this year: {{ person.allowance ?? '–' }} days</p>
+    <p v-for="y in person.years ?? []" :key="y.year">Allowance {{ y.year }}: {{ y.allowance ?? '–' }} days · {{ y.daysLeft }} days left</p>
     <p v-if="problem" class="problem" role="alert">{{ problem }}</p>
     <p v-if="done" role="status">{{ done }}</p>
 
@@ -263,7 +267,7 @@ function saveAllowance() {
     <h2>Changes</h2>
     <ul v-if="history.history.length">
       <li v-for="(c, i) in history.history" :key="i">
-        {{ c.at.slice(0, 16).replace('T', ' ') }} UTC — {{ c.what }}<template v-if="c.to"> ({{ c.from ? `${c.from} → ` : '' }}{{ c.to }})</template><template v-if="c.by"> by {{ c.by }}</template>
+        {{ c.at.slice(0, 16).replace('T', ' ') }} UTC — {{ c.what }}<template v-if="c.to !== null"> ({{ c.from !== null ? `${c.from} → ` : '' }}{{ c.to }})</template><template v-if="c.startsYear"> from {{ c.startsYear }}</template><template v-if="c.by"> by {{ c.by }}</template>
       </li>
     </ul>
     <p v-else>No changes yet.</p>

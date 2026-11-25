@@ -8,6 +8,8 @@ export {
   forecastFor,
   KINDS,
   ownRequestsForViewer,
+  peopleWithYears,
+  type PersonYear,
   sendForViewer,
   type Kind,
   type OwnRequest,
