@@ -1,11 +1,12 @@
 // Purpose: ledger tests for ROW-215 (REQ-013, REQ-014) and ROW-216 (REQ-013, REQ-020, REQ-023) — an email is trimmed and compared without regard to letter case at creation and at sign-in; creating or renaming an account with an empty or blank name (only spaces and invisible characters, A-056) is refused.
-// Provenance: hand-authored (test-author pass, slice 0, batch test-author-13; the A-056 case added by batch test-author-26); fixture data made through the product's public routes by harness.ts (reset, accounts, rename, sign-in), fresh per run.
+// Provenance: hand-authored (test-author pass, slice 0, batch test-author-13; the A-056 case added by batch test-author-26; the every-White_Space and default-ignorable cases of the A-058 wording added by batch test-author-27, with unicode-text.ts); fixture data made through the product's public routes by harness.ts (reset, accounts, rename, sign-in), fresh per run.
 //
 // Boundary (R6): rules, proved at the HTTP harness — POST /api/admin/accounts, POST /api/admin/accounts/:id/name and
 // POST /api/auth/sign-in (D-029). "Signed in" is judged by the session (GET /api/me on the same jar), not the status.
 import { test, expect } from '@playwright/test';
-import { anonymousApi, createMember, fresh, freshEmail, freshName, freshPassword, signIn, type Actor } from './harness';
+import { anonymousApi, createMember, fresh, freshEmail, freshName, freshPassword, SetupError, signIn, type Actor } from './harness';
 import { disposeAll, freshTeam, isRuleRefusal, keep, listOf, peopleText, stringLeaves } from './robustness';
+import { chars, draw, drawOne, everyIgnorable, isBlankName, NAMED_IGNORABLES, nameKey, show, WHITE_SPACE } from './unicode-text';
 
 test.afterEach(disposeAll);
 
@@ -186,6 +187,98 @@ test('ROW-216.REQ-013.names-of-only-spaces-and-invisible-characters-are-refused'
   }
   const people = (await peopleText(admin)).toLowerCase();
   expect.soft(emails.filter((e) => people.includes(e)), 'ROW-216: no account was created with a name of only spaces and invisible characters').toEqual([]);
+  const session = keep(await signIn({ email: m.email, password: m.password }));
+  expect.soft(session.me.name, "ROW-216: M's name is unchanged").toBe(m.name);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-216 (A-058 wording, batch test-author-27) promise: the row as reworded — a name "made only of white space —
+// ROW-216   every Unicode White_Space character, the no-break space included — and characters that display as
+// ROW-216   nothing — the Unicode default-ignorable code points, such as a zero-width space or word joiner — in any mix"
+// ROW-216   is refused at create and at rename; A-056, REQ-024 AMENDED (A-058: the White_Space and default-ignorable sets
+// ROW-216   are Unicode's), REQ-013 (an account is never created without a name), REQ-020 (create and change a name).
+// ROW-216 wrong product: a blank check of trim() plus a short hand list of zero-width characters (U+200B to U+200D,
+// ROW-216   U+2060, U+FEFF) — it passes a name of U+034F, U+115F, U+3164, U+FFA0, a variation selector, a bidi control or a
+// ROW-216   tag character, alone or beside no-break and ideographic spaces; a check of trim() or a regex \s, which leave
+// ROW-216   U+0085 (next line, a White_Space character) in place; a create that uses the full sets while rename does not.
+// ROW-216 given: member M with a fresh name N. when: the admin creates accounts (each with a fresh email) named by:
+// ROW-216   each of the 25 White_Space code points alone; runs of no-break and of ideographic spaces; those spaces mixed
+// ROW-216   with default-ignorables in either order; each named default-ignorable from across the property's ranges alone;
+// ROW-216   and blanks drawn afresh this run from every default-ignorable and White_Space code point, each holding a no-break
+// ROW-216   or ideographic space; and renames M to each of them. then: each create and each rename is refused (a rule's
+// ROW-216   4xx); no account with those emails is on the people list; M signs in still named N.
+// ROW-216 controls: ROW-216.control.a-real-name-wrapped-in-such-characters-creates-and-renames — a fresh real name
+// ROW-216   wrapped in the same no-break, ideographic and zero-width characters is accepted at create and at rename, so a
+// ROW-216   product cannot pass by refusing every name that carries them; and the existing control (plain names work).
+// ROW-216 technique: "every" — all 25 White_Space code points by name, a named example from each default-ignorable
+// ROW-216   range, and a property over blanks generated per run from the whole default-ignorable set (the message names
+// ROW-216   every code point sent); the neighbouring record (M's name) must stay untouched.
+// ROW-216 cases: ROW-216 target=ROW-216.REQ-013.names-of-only-white-space-and-default-ignorables-in-any-mix-are-refused control=ROW-216.control.a-real-name-wrapped-in-such-characters-creates-and-renames
+const NBSP = 0x00a0;
+const IDSP = 0x3000;
+
+function a056Blanks(): string[] {
+  const ws = WHITE_SPACE.map((c) => chars(c));
+  const runs = [chars(NBSP, NBSP, NBSP), chars(IDSP, IDSP), chars(NBSP, IDSP, NBSP), chars(IDSP, 0x0020, NBSP, 0x2003)];
+  const mixed = [
+    chars(NBSP, 0x200b),
+    chars(0x200b, NBSP),
+    chars(IDSP, 0x2060, IDSP),
+    chars(0x2060, IDSP, 0x200d),
+    chars(NBSP, 0x200c, IDSP, 0xfeff),
+    chars(0x034f, NBSP, 0x3164),
+    chars(IDSP, 0xfe0f, 0x202f, 0xe0020),
+    chars(0x1680, 0x115f, 0x205f, 0x1160, 0x0085),
+  ];
+  const named = NAMED_IGNORABLES.map((c) => chars(c));
+  const pool = [...everyIgnorable(), ...WHITE_SPACE];
+  const drawn: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    const cps = [drawOne([NBSP, IDSP]), ...draw(pool, 1 + Math.floor(Math.random() * 3))];
+    drawn.push(chars(...draw(cps, cps.length))); // shuffled
+  }
+  const all = [...ws, ...runs, ...mixed, ...named, ...drawn];
+  const notBlank = all.filter((b) => !isBlankName(b));
+  if (notBlank.length > 0) throw new SetupError(`the test's own blanks are not blank: ${notBlank.map(show).join(', ')}`);
+  return all;
+}
+
+test('ROW-216.control.a-real-name-wrapped-in-such-characters-creates-and-renames', async () => {
+  const { admin } = await freshTeam();
+  const name = `${chars(NBSP, 0x200b)}${freshName('Zoë')}${chars(IDSP, 0x2060)}`;
+  const email = freshEmail('wrapped');
+  const password = freshPassword();
+  const created = await admin.api.post('/api/admin/accounts', { data: { name, email, password, allowance: 10 } });
+  expect(created.status(), `ROW-216 control: a create with the real name ${show(name)} is accepted`).toBeLessThan(300);
+  const session = keep(await signIn({ email, password }));
+  expect(nameKey(session.me.name), 'ROW-216 control: the account carries that name').toBe(nameKey(name));
+  const m = await createMember(admin);
+  const next = `${chars(IDSP, 0x034f)}${freshName('Łucja')}${chars(0x200d, NBSP)}`;
+  const res = await admin.api.post(`/api/admin/accounts/${encodeURIComponent(String(m.id))}/name`, { data: { name: next } });
+  expect(res.status(), `ROW-216 control: a rename to the real name ${show(next)} is accepted`).toBeLessThan(300);
+  const renamed = keep(await signIn({ email: m.email, password: m.password }));
+  expect(nameKey(renamed.me.name), 'ROW-216 control: the rename took effect').toBe(nameKey(next));
+});
+
+test('ROW-216.REQ-013.names-of-only-white-space-and-default-ignorables-in-any-mix-are-refused', async () => {
+  test.setTimeout(240_000);
+  const { admin } = await freshTeam();
+  const m = await createMember(admin);
+  const blanks = a056Blanks();
+
+  const emails: string[] = [];
+  for (const b of blanks) {
+    const email = freshEmail('a056');
+    emails.push(email);
+    const status = await tryCreate(admin, { name: b, email, password: freshPassword(), allowance: 10 });
+    expect.soft(isRuleRefusal(status), `ROW-216 create with a name of only ${show(b)} is refused (answered ${status})`).toBe(true);
+  }
+  for (const b of blanks) {
+    const res = await admin.api.post(`/api/admin/accounts/${encodeURIComponent(String(m.id))}/name`, { data: { name: b } });
+    expect.soft(isRuleRefusal(res.status()), `ROW-216 rename to a name of only ${show(b)} is refused (answered ${res.status()})`).toBe(true);
+  }
+  const people = (await peopleText(admin)).toLowerCase();
+  expect.soft(emails.filter((e) => people.includes(e)), 'ROW-216: no account was created with a name of only white space and default-ignorables').toEqual([]);
   const session = keep(await signIn({ email: m.email, password: m.password }));
   expect.soft(session.me.name, "ROW-216: M's name is unchanged").toBe(m.name);
 });
