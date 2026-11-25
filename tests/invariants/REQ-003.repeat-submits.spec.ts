@@ -5,6 +5,9 @@
 // was recorded is read at the HTTP harness (GET /api/requests, GET /api/balance). Form readings: robustness.ts.
 // The overlap refusal's text is LEARNED at the end of ROW-208's case by deliberately sending the same days again, so
 // "never shows a refusal of its own first submit" looks for the product's own refusal text, not a guess.
+// Slice 1, brief test-author-11: ROW-208's second pair of cases added at the end — the send route's POSTs counted on the
+// page itself, and every line the page draws watched as it is drawn (so a refusal erased by the move to / is seen);
+// every earlier assertion kept.
 //
 // Readiness (why no read is one-shot): settle() waits on the page's load state, which a fetch made after the page
 // loaded never changes, so it does not wait for a send. Each case therefore watches the writes the page itself starts
@@ -237,6 +240,221 @@ test('ROW-209.REQ-003.one-submit-records-one-request-and-shows-success', async (
     expect.soft(await pendingDays(m, 2027), `ROW-209: exactly ${range.days} days pending`).toBe(range.days);
     const appeared = await appearedUntil(opened.page, before, (lines) => lines.some((l) => SUCCESS_WORDS.test(l)));
     expect.soft(appeared.some((l) => SUCCESS_WORDS.test(l)), `ROW-209: the page says the request was sent (appeared: ${JSON.stringify(appeared)})`).toBe(true);
+  } finally {
+    await opened.close();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-208 — the send route's POSTs counted and every drawn line watched (added, slice 1, brief test-author-11)
+//
+// Two instruments, both on the page from its first load (and on every document it loads after):
+//   - watchSends counts the POSTs the page itself starts to the send route, POST /api/requests (D-029), and every
+//     other write to a /api/requests… route, so a repeat is seen as a second post whatever the server then does
+//     with it;
+//   - watchDrawn is a MutationObserver installed by an init script that reports to the test the text of every node
+//     the page inserts, every text it changes and every element whose class, style or hidden state changes — at the
+//     moment it happens, so a refusal drawn and then erased by the move to / is still seen.
+// ---------------------------------------------------------------------------------------------------
+
+/** The page's writes to the request routes: POSTs to the send route exactly, and every non-GET to /api/requests…. */
+interface Sends {
+  posts(): number;
+  writes(): number;
+}
+
+function watchSends(page: Page): Sends {
+  let posts = 0;
+  let writes = 0;
+  page.on('request', (r) => {
+    if (/^(GET|HEAD|OPTIONS)$/i.test(r.method())) return;
+    let path = '';
+    try {
+      path = new URL(r.url()).pathname.replace(/\/+$/, '');
+    } catch {
+      return;
+    }
+    if (path === '/api/requests' || path.startsWith('/api/requests/')) writes += 1;
+    if (path === '/api/requests' && r.method().toUpperCase() === 'POST') posts += 1;
+  });
+  return { posts: () => posts, writes: () => writes };
+}
+
+/** Every line the page drew, in the order drawn; `mark()` is a position, `since(m)` the lines drawn after it. */
+interface Drawn {
+  mark(): number;
+  since(m: number): string[];
+}
+
+/** Installs the drawn-text watch on `page`. Call before the page's first navigation. */
+async function watchDrawn(page: Page): Promise<Drawn> {
+  const seen: string[] = [];
+  await page.exposeFunction('__vidDrawn', (t: string) => {
+    for (const l of String(t).split('\n')) {
+      const s = l.trim();
+      if (s !== '') seen.push(s);
+    }
+  });
+  await page.addInitScript(() => {
+    const report = (node: Node | null) => {
+      const el = node === null ? null : node.nodeType === 1 ? (node as HTMLElement) : node.parentElement;
+      if (!el) return;
+      const t = (el as HTMLElement).innerText ?? el.textContent ?? '';
+      if (t.trim() === '') return;
+      try {
+        void (window as unknown as { __vidDrawn?: (t: string) => unknown }).__vidDrawn?.(t.slice(0, 8000));
+      } catch {
+        /* the test reads what arrived */
+      }
+    };
+    new MutationObserver((list) => {
+      for (const m of list) {
+        if (m.type === 'childList') m.addedNodes.forEach((n) => report(n));
+        else report(m.target);
+      }
+    }).observe(document, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden', 'open'],
+    });
+  });
+  return { mark: () => seen.length, since: (m) => seen.slice(m) };
+}
+
+/** The lines of `drawn` that show `refusal` (one of its lines, of 6 characters or more, inside a drawn line) or refusal wording. */
+function refusalsIn(drawn: string[], refusal: string[], before: string[]): string[] {
+  const known = new Set(before);
+  const learned = refusal.filter((l) => l.length >= 6);
+  return [...new Set(drawn.filter((l) => !known.has(l) && (REFUSAL_WORDS.test(l) || learned.some((r) => l.includes(r)))))];
+}
+
+// ROW-208 promise: the row — a double click, reload or Back after a submitted send-request form never repeats the send
+// ROW-208   and never shows a refusal of the user's own first submit; REQ-003 (a second request sharing a day is refused,
+// ROW-208   so a repeated send is either a second post refused as an overlap or a second request); D-029 (the send is
+// ROW-208   POST /api/requests); D-037 (that refusal is a 409 with one plain message).
+// ROW-208 wrong product: a Send button left enabled while its post is in flight, so a double click posts twice; the
+// ROW-208   server refuses the second as an overlap (one request stays — REQ-003 makes that true anyway) and the page draws
+// ROW-208   the refusal, then the first post's success moves it to / and the refusal is erased before anyone reads the
+// ROW-208   page; or a form posted as a document, so a reload or Back re-posts it.
+// ROW-208 given: member M with no requests; a fresh range of N (1..4) weekdays from Mon 15 Mar 2027; the send counter
+// ROW-208   and the drawn-text watch on M's page from its first load. when: M fills the form and double-clicks Send; then
+// ROW-208   reloads; then goes Back. then: the double click made exactly one POST to /api/requests and one write to the
+// ROW-208   request routes, and the reload and Back none; and no line drawn at any moment from the double click to the end
+// ROW-208   of Back — read from the watch, so before the move to / as well as after — shows the product's own overlap
+// ROW-208   refusal (learned last, from a deliberate repeat) or refusal wording.
+// ROW-208 controls: ROW-208.control.a-deliberate-repeat-posts-once-and-the-watch-sees-its-refusal — one press of Send
+// ROW-208   on the same days again is one POST, is refused (still one request) and the refusal it draws is in the watch:
+// ROW-208   the counter counts and the watch sees a drawn refusal, so a target that sees none means none was drawn.
+// ROW-208 technique: before/after counts at the network boundary of the page itself (the post, not the record the server
+// ROW-208   keeps), and a watch on the drawing rather than a read of the page at the end; the decoy is the product's own
+// ROW-208   refusal text, learned.
+// ROW-208 cases: ROW-208 target=ROW-208.REQ-003.double-click-posts-the-send-once-and-no-refusal-is-ever-drawn control=ROW-208.control.a-deliberate-repeat-posts-once-and-the-watch-sees-its-refusal
+
+/** M's own request on `range` already sent (through the form, once), then a fresh form with the same days pressed once: what it posted and drew. */
+async function deliberateRepeat(
+  page: Page,
+  m: Parameters<typeof ownRequests>[0],
+  range: ReturnType<typeof freshRange>,
+  writes: Writes,
+  sends: Sends,
+  drawn: Drawn,
+): Promise<{ posts: number; requests: number; refusal: string[]; watched: string[]; before: string[] }> {
+  await openSendForm(page);
+  const again = await fillSendForm(page, range, { press: false });
+  const before = await textLines(page);
+  const mark = writes.started();
+  const postMark = sends.posts();
+  const drawMark = drawn.mark();
+  await sendButton(again).click();
+  await settle(page);
+  await answered(page, writes, mark, 1);
+  const refusal = await appearedUntil(page, before, (lines) => lines.length > 0);
+  await frames(page);
+  return { posts: sends.posts() - postMark, requests: (await ownRequests(m)).length, refusal, watched: drawn.since(drawMark), before };
+}
+
+test('ROW-208.control.a-deliberate-repeat-posts-once-and-the-watch-sees-its-refusal', async ({ browser }) => {
+  const { admin } = await freshTeam();
+  const m = keep(await signInMember(await createMember(admin)));
+  const range = freshRange();
+  const opened = await openPage(browser, m);
+  const page = opened.page;
+  const writes = watchWrites(page);
+  const sends = watchSends(page);
+  const drawn = await watchDrawn(page);
+  try {
+    await openSendForm(page);
+    await fillSendForm(page, range);
+    await settle(page);
+    await expect.poll(async () => (await ownRequests(m)).length, { message: 'ROW-208 control: the first send records one request', timeout: 10_000 }).toBe(1);
+    const r = await deliberateRepeat(page, m, range, writes, sends, drawn);
+    expect.soft(r.posts, 'ROW-208 control: one press of Send is one POST to /api/requests').toBe(1);
+    expect.soft(r.requests, 'ROW-208 control: the repeat is refused (still one request)').toBe(1);
+    expect(r.refusal.length, 'ROW-208 control: the refusal is drawn').toBeGreaterThan(0);
+    const missed = r.refusal.filter((l) => !r.watched.some((w) => w.includes(l)));
+    expect.soft(missed, `ROW-208 control: every drawn refusal line is in the watch (watched: ${JSON.stringify(r.watched.slice(0, 40))})`).toEqual([]);
+  } finally {
+    await opened.close();
+  }
+});
+
+test('ROW-208.REQ-003.double-click-posts-the-send-once-and-no-refusal-is-ever-drawn', async ({ browser }) => {
+  const { admin } = await freshTeam();
+  const m = keep(await signInMember(await createMember(admin)));
+  const range = freshRange();
+  const opened = await openPage(browser, m);
+  const page = opened.page;
+  const writes = watchWrites(page);
+  const sends = watchSends(page);
+  const drawn = await watchDrawn(page);
+  try {
+    await openSendForm(page);
+    const form = await fillSendForm(page, range, { press: false });
+    expect(await ownRequests(m), 'ROW-208 before: M has no request').toHaveLength(0);
+    const formLines = await textLines(page);
+    const drawFrom = drawn.mark();
+
+    // The double click: exactly one post, read after every write the page started has had its answer and the move
+    // that follows the answer has been drawn.
+    let mark = writes.started();
+    let postMark = sends.posts();
+    let writeMark = sends.writes();
+    await sendButton(form).click({ clickCount: 2 });
+    await settle(page);
+    await answered(page, writes, mark, 1);
+    await appearedUntil(page, formLines, (lines) => lines.some((l) => SUCCESS_WORDS.test(l) || REFUSAL_WORDS.test(l)));
+    await settle(page);
+    await answered(page, writes, mark, 1);
+    expect.soft(sends.posts() - postMark, 'ROW-208 double click: exactly one POST to /api/requests').toBe(1);
+    expect.soft(sends.writes() - writeMark, 'ROW-208 double click: exactly one write to the request routes').toBe(1);
+
+    mark = writes.started();
+    postMark = sends.posts();
+    writeMark = sends.writes();
+    await page.reload();
+    await settle(page);
+    await answered(page, writes, mark, 0);
+    expect.soft(sends.writes() - writeMark, 'ROW-208 reload: no write to the request routes').toBe(0);
+
+    mark = writes.started();
+    await page.goBack().catch(() => null);
+    await settle(page);
+    await answered(page, writes, mark, 0);
+    expect.soft(sends.writes() - writeMark, 'ROW-208 reload and back: no write to the request routes').toBe(0);
+    expect.soft(sends.posts() - postMark, 'ROW-208 reload and back: no POST to /api/requests').toBe(0);
+    expect.soft((await ownRequests(m)).length, 'ROW-208: exactly one request recorded').toBe(1);
+    await frames(page);
+    const watched = drawn.since(drawFrom);
+
+    // The product's own overlap refusal, learned from a deliberate repeat; it must itself be drawn and watched.
+    const r = await deliberateRepeat(page, m, range, writes, sends, drawn);
+    expect(r.requests, 'ROW-208 setup: the deliberate repeat is refused (overlap rule on)').toBe(1);
+    expect(r.refusal.length, 'ROW-208 setup: the deliberate repeat draws its refusal, so there is a text to look for').toBeGreaterThan(0);
+    expect
+      .soft(refusalsIn(watched, r.refusal, formLines), `ROW-208: no line drawn from the double click to the end of Back shows a refusal (learned: ${JSON.stringify(r.refusal)})`)
+      .toEqual([]);
   } finally {
     await opened.close();
   }

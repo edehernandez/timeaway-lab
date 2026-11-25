@@ -6,7 +6,10 @@
 // naming is imposed. ROW-269's "by a page or by any data sent to them" adds the browser (harness openPage,
 // Chromium) to watch every body a page load receives.
 // Time: each change is made at its own team-clock instant, hours apart, so every "when" belongs to one change only.
-import { test, expect } from '@playwright/test';
+// Slice 1, brief test-author-11: at the end, ROW-268's case reading D-043's own fields (from, to, by, at) so a swapped
+// entry fails, and ROW-269's cases probing every member route and page for the entries' facts (values, starting year,
+// who, when), not only the earlier names; every earlier assertion kept.
+import { test, expect, type Page, type Response } from '@playwright/test';
 import {
   anonymousApi,
   createMember,
@@ -14,6 +17,7 @@ import {
   freshName,
   openPage,
   PAGES,
+  productUrl,
   rename,
   resetProduct,
   setAllowance,
@@ -25,6 +29,7 @@ import {
   type Member,
 } from './harness';
 import {
+  carries,
   freshInt,
   getRaw,
   is2xx,
@@ -36,6 +41,7 @@ import {
   recordCarriesYear,
   showRecord,
   teamInstant,
+  teamTimeOf,
   type Rec,
 } from './admin-kit';
 
@@ -341,6 +347,320 @@ test('ROW-269.REQ-028.nobody-but-the-admin-sees-the-history', async ({ browser }
       const a = await getRaw(anon, history);
       expect.soft(is2xx(a.status), `ROW-269 anonymous: the history route is refused (answered ${a.status})`).toBe(false);
       expect.soft(leaked(a.text), 'ROW-269 anonymous: the history route carries no earlier name').toEqual([]);
+    } finally {
+      await anon.dispose();
+    }
+  } finally {
+    await subject.dispose();
+    await neighbour.dispose();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// Added, slice 1, brief test-author-11: ROW-268 read by D-043's own fields, and ROW-269 probed for the entries' facts.
+// D-043: GET /api/admin/people/:id/history answers {history:[…]} newest first, a rename {at, by, what:'renamed', from,
+// to} and an allowance change {at, by, what:'allowance set', from, to, startsYear}; `by` the maker's display name.
+// ---------------------------------------------------------------------------------------------------
+
+type Entry = Record<string, unknown>;
+
+/** D-043's history list from a raw history answer's text: the `history` array's objects, or null when there is none. */
+function entriesIn(text: string): Entry[] | null {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const list = (body as { history?: unknown } | null)?.history;
+  if (!Array.isArray(list)) return null;
+  return list.filter((e): e is Entry => e !== null && typeof e === 'object' && !Array.isArray(e));
+}
+
+/** A field's value equals `want`: a name as its exact text (trimmed), an allowance as the number (a numeric text read as its number). */
+function fieldIs(v: unknown, want: string | number): boolean {
+  if (typeof want === 'number') return (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && Number(v) === want;
+  return typeof v === 'string' && v.trim() === want;
+}
+
+/** The four changes of the world with their raw old and new values, in the order they were made. */
+function rawChanges(): { what: string; from: string | number; to: string | number; at: string }[] {
+  const { n0, n1, n2 } = w.names;
+  const { a0, a1, a2 } = w.allowances;
+  return [
+    { what: `rename "${n0}" → "${n1}"`, from: n0, to: n1, at: w.changes[0].at },
+    { what: `rename "${n1}" → "${n2}"`, from: n1, to: n2, at: w.changes[1].at },
+    { what: `allowance ${a0} → ${a2} starting ${THIS_YEAR + 1}`, from: a0, to: a2, at: w.changes[2].at },
+    { what: `allowance ${a0} → ${a1} starting ${THIS_YEAR}`, from: a0, to: a1, at: w.changes[3].at },
+  ];
+}
+
+// ROW-268 promise: REQ-028 fail-if (2) "a listed change lacks its old value, new value, who or when"; REQ-028 "each
+// ROW-268   change with its old and new value …, who made it and when"; D-043 names the fields: from, to, by, at.
+// ROW-268 wrong product: an entry listing a2 → a0 for the change from a0 to a2 (old and new swapped), or "Hanna →
+// ROW-268   Greta" for the rename of Greta to Hanna; the by-value case above (the old value anywhere in the record)
+// ROW-268   stays green on it; or `by` naming the person changed instead of the admin, `at` the time of the read.
+// ROW-268 given: the four changes of ROW-267 (renames N0→N1 at 10:17, N1→N2 at 11:34; allowance A0→A2 from next year
+// ROW-268   at 13:05, A0→A1 from this year at 14:46 team time, 8 Mar 2027), made by the admin (fresh name). when: the admin
+// ROW-268   reads the subject's history. then: for each change exactly one entry's `to` is its new value, and that entry's
+// ROW-268   `from` is its old value, its `by` the admin's name, its `at` its own instant (no other change's); no entry runs a
+// ROW-268   change the other way (from its new value to its old one).
+// ROW-268 controls: ROW-268.control.each-change-is-listed (above) — a record for each change exists, found by its new
+// ROW-268   value wherever it sits, so it stands whichever way round a product stores the values: a red target here is a
+// ROW-268   wrong field, not a missing change (ROW-267's).
+// ROW-268 technique: the promised field per fact (D-043), the swapped entry as the decoy that must not match, the
+// ROW-268   instants hours apart so each `at` fits one change only.
+// ROW-268 cases: ROW-268 target=ROW-268.REQ-028.each-entry-carries-from-to-by-and-at-in-its-own-fields control=ROW-268.control.each-change-is-listed
+test('ROW-268.REQ-028.each-entry-carries-from-to-by-and-at-in-its-own-fields', async () => {
+  await world();
+  const entries = entriesIn(w.after.text);
+  expect(entries, `ROW-268: the history answers D-043's {history:[…]} — body: ${w.after.text.slice(0, 300)}`).not.toBeNull();
+  const changes = rawChanges();
+  for (const c of changes) {
+    const hits = (entries ?? []).filter((e) => fieldIs(e.to, c.to));
+    expect.soft(hits.length, `ROW-268: exactly one entry has to = ${JSON.stringify(c.to)} for the ${c.what} — ${w.after.text.slice(0, 600)}`).toBe(1);
+    for (const e of hits) {
+      expect.soft(fieldIs(e.from, c.from), `ROW-268: the ${c.what} has from = ${JSON.stringify(c.from)} — ${showRecord(e as Rec)}`).toBe(true);
+      expect.soft(fieldIs(e.by, w.install.admin.name), `ROW-268: the ${c.what} has by = "${w.install.admin.name}" — ${showRecord(e as Rec)}`).toBe(true);
+      expect.soft(recordCarriesInstant({ at: e.at as Rec[string] }, c.at, ZONE), `ROW-268: the ${c.what} has at = its instant ${c.at} — ${showRecord(e as Rec)}`).toBe(true);
+      for (const o of changes.filter((x) => x !== c)) {
+        expect.soft(recordCarriesInstant({ at: e.at as Rec[string] }, o.at, ZONE), `ROW-268: the ${c.what}'s at is not another change's (${o.at})`).toBe(false);
+      }
+    }
+    const swapped = (entries ?? []).filter((e) => fieldIs(e.from, c.to) && fieldIs(e.to, c.from));
+    expect.soft(swapped.map((e) => showRecord(e as Rec)), `ROW-268: no entry runs the ${c.what} the other way`).toEqual([]);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-269 promise: REQ-028 fail-if (3) "anyone but the admin sees the history"; the row: "by a page or by any data sent
+// ROW-269   to them"; what the history holds is D-043's entries — the old and new values, the year an allowance change
+// ROW-269   starts, who made it and when — so seeing the history is receiving any of those facts.
+// ROW-269 wrong product: a member route or page that sends the person's allowance-change entries — {what:'allowance
+// ROW-269   set', from: A0, to: A1, startsYear, by, at} in /api/me or /api/balance, "changed by <admin> at 14:46" on the own
+// ROW-269   page, the entries in the page's payload — none of which carries an earlier NAME, so the case above stays green.
+// ROW-269 given: the world of ROW-267 (the subject's allowance A0 → A2 from next year and A0 → A1 from this year, two
+// ROW-269   renames, all by the admin at 10:17, 11:34, 13:05 and 14:46 team time), the neighbour renamed and given a fresh
+// ROW-269   allowance. when: the subject, the neighbour and an anonymous caller GET the history routes and every member
+// ROW-269   data route (/api/me, /api/requests, /api/balance, /api/calendar, /api/today, the admin's people, pending and
+// ROW-269   person routes), and the subject and neighbour load the pages in the browser. then: no JSON answer or JSON body a
+// ROW-269   page receives holds a history entry (an object whose what is 'renamed' or 'allowance set', carrying startsYear,
+// ROW-269   or carrying from, to and by together), the subject's old allowance A0 as a number (the neighbour: A0, A1 or A2,
+// ROW-269   the subject's allowances), the admin's name, or a change's instant (ISO or epoch); no page document or drawn
+// ROW-269   text carries the admin's name, a change's instant or its team time (10:17, 11:34, 13:05, 14:46), and no drawn
+// ROW-269   text the old allowance as a number of its own.
+// ROW-269 controls: ROW-269.control.the-history-holds-the-entry-facts-and-the-page-capture-sees-data — the admin's
+// ROW-269   history carries the allowance entry from A0 by the admin at 14:46 (the facts probed for exist and are what the
+// ROW-269   history holds), and the subject's /calendar load receives an /api/ JSON body (the capture reaches page data).
+// ROW-269 technique: the entries' facts as fresh values only the history holds (A0 is no year's allowance after the
+// ROW-269   changes; the subject has no request, so no admin decided anything of theirs), D-043's entry shape as a
+// ROW-269   structural probe, every member route and page as the denominator, three non-admin actors.
+// ROW-269 cases: ROW-269 target=ROW-269.REQ-028.no-member-route-or-page-carries-the-history-entries control=ROW-269.control.the-history-holds-the-entry-facts-and-the-page-capture-sees-data
+
+interface EntrySecrets {
+  numbers: number[];
+  strings: string[];
+  instants: string[];
+}
+
+const ID_FIELD = /(^id$|Id$|_id$|^ids?$|Ids$)/;
+
+/** Every way the JSON value carries a history entry or one of its facts, described. */
+function jsonLeaks(v: unknown, s: EntrySecrets, key = ''): string[] {
+  const out: string[] = [];
+  if (Array.isArray(v)) {
+    for (const x of v) out.push(...jsonLeaks(x, s, key));
+    return out;
+  }
+  if (v !== null && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    if (o.what === 'renamed' || o.what === 'allowance set') out.push(`a history entry (what: ${String(o.what)})`);
+    if ('startsYear' in o) out.push('a startsYear field');
+    if ('from' in o && 'to' in o && 'by' in o) out.push('an object with from, to and by');
+    for (const [k, x] of Object.entries(o)) out.push(...jsonLeaks(x, s, k));
+    return out;
+  }
+  if (typeof v === 'number' && !ID_FIELD.test(key)) {
+    if (s.numbers.includes(v)) out.push(`the allowance ${v} (under "${key}")`);
+    for (const i of s.instants) {
+      const t = Date.parse(i);
+      if (Math.abs(v - t) <= 60_000 || Math.abs(v * 1000 - t) <= 60_000) out.push(`the instant ${i} as ${v} (under "${key}")`);
+    }
+  }
+  if (typeof v === 'string') out.push(...textLeaks(v, s, ''));
+  return out;
+}
+
+/** Every way a text carries the admin's name or a change's instant (as ISO, to the minute in UTC, or parsed). */
+function textLeaks(text: string, s: EntrySecrets, where: string): string[] {
+  const out: string[] = [];
+  for (const x of s.strings) if (carries(text, x)) out.push(`"${x}"${where}`);
+  for (const i of s.instants) {
+    if (text.includes(i.slice(0, 16))) out.push(`the instant ${i}${where}`);
+  }
+  return out;
+}
+
+/** Every way drawn text carries the facts: the strings, a change's team time, or an allowance as a number of its own. */
+function drawnLeaks(text: string, s: EntrySecrets): string[] {
+  const out = textLeaks(text, s, ' (drawn)');
+  for (const i of s.instants) {
+    const hhmm = teamTimeOf(i, ZONE);
+    if (carries(text, hhmm)) out.push(`the team time ${hhmm} of ${i} (drawn)`);
+  }
+  for (const n of s.numbers) if (carries(text, String(n))) out.push(`the allowance ${n} (drawn)`);
+  return out;
+}
+
+interface Captured {
+  url: string;
+  path: string;
+  type: string;
+  text: string;
+}
+
+/** Loads `address`, keeping every same-origin answer the load receives (its path, content type and text), the final document and its drawn text. */
+async function loadKeeping(page: Page, address: string): Promise<{ status: number; bodies: Captured[]; html: string; drawn: string }> {
+  const origin = new URL(productUrl()).origin;
+  const pending: Promise<Captured | null>[] = [];
+  const onResponse = (res: Response) => {
+    let u: URL;
+    try {
+      u = new URL(res.url());
+    } catch {
+      return;
+    }
+    if (u.origin !== origin) return;
+    const type = (res.headers()['content-type'] ?? '').split(';')[0].trim().toLowerCase();
+    pending.push(
+      res
+        .text()
+        .then((text) => ({ url: res.url(), path: u.pathname, type, text }))
+        .catch(() => null),
+    );
+  };
+  page.on('response', onResponse);
+  try {
+    const response = await page.goto(address);
+    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    const bodies = (await Promise.all(pending)).filter((b): b is Captured => b !== null);
+    const html = await page.content().catch(() => '');
+    const drawn = await page.evaluate(() => document.body?.innerText ?? '').catch(() => '');
+    return { status: response?.status() ?? 0, bodies, html, drawn };
+  } finally {
+    page.off('response', onResponse);
+  }
+}
+
+/** Every leak of a page load: its /api/ JSON bodies read as data, its HTML and other JSON as text, its drawn text. Script, style and font bodies are code, not data, and are not read. */
+function loadLeaks(load: { bodies: Captured[]; html: string; drawn: string }, s: EntrySecrets): string[] {
+  const out: string[] = [];
+  for (const b of load.bodies) {
+    if (b.type.includes('json')) {
+      let parsed: unknown;
+      let ok = true;
+      try {
+        parsed = JSON.parse(b.text);
+      } catch {
+        ok = false;
+      }
+      if (ok && b.path.startsWith('/api/')) out.push(...jsonLeaks(parsed, s).map((x) => `${x} in ${b.path}`));
+      else out.push(...textLeaks(b.text, s, ` in ${b.path}`));
+    } else if (b.type.includes('html')) {
+      out.push(...textLeaks(b.text, s, ` in ${b.path}`));
+    }
+  }
+  out.push(...textLeaks(load.html, s, ' in the document'));
+  out.push(...drawnLeaks(load.drawn, s));
+  return [...new Set(out)];
+}
+
+/** Every leak of a raw data answer: as data when it is JSON, else as text. */
+function answerLeaks(text: string, s: EntrySecrets): string[] {
+  try {
+    return [...new Set(jsonLeaks(JSON.parse(text), s))];
+  } catch {
+    return textLeaks(text, s, '');
+  }
+}
+
+function changeInstants(): string[] {
+  return w.changes.map((c) => c.at);
+}
+
+test('ROW-269.control.the-history-holds-the-entry-facts-and-the-page-capture-sees-data', async ({ browser }) => {
+  await world();
+  const entries = entriesIn(w.after.text) ?? [];
+  const thisYear = entries.find((e) => fieldIs(e.to, w.allowances.a1));
+  expect(thisYear, `ROW-269 control: the admin's history holds the allowance change to A1 — ${w.after.text.slice(0, 400)}`).toBeDefined();
+  expect.soft(fieldIs(thisYear?.from, w.allowances.a0), 'ROW-269 control: its from is A0 (the old allowance probed for)').toBe(true);
+  expect.soft(fieldIs(thisYear?.by, w.install.admin.name), "ROW-269 control: its by is the admin's name (the who probed for)").toBe(true);
+  expect.soft(recordCarriesInstant({ at: (thisYear?.at ?? null) as Rec[string] }, w.changes[3].at, ZONE), 'ROW-269 control: its at is 14:46 (the when probed for)').toBe(true);
+  const subject = await signInMember(w.subject);
+  const opened = await openPage(browser, subject);
+  try {
+    const load = await loadKeeping(opened.page, PAGES.calendar);
+    expect(load.status, 'ROW-269 control: /calendar answers the subject').toBe(200);
+    expect(load.bodies.filter((b) => b.path.startsWith('/api/') && b.type.includes('json')).map((b) => b.path), 'ROW-269 control: the /calendar load receives /api/ JSON data').not.toEqual([]);
+  } finally {
+    await opened.close();
+    await subject.dispose();
+  }
+});
+
+test('ROW-269.REQ-028.no-member-route-or-page-carries-the-history-entries', async ({ browser }) => {
+  test.setTimeout(180_000);
+  await world();
+  const { a0, a1, a2 } = w.allowances;
+  const forSubject: EntrySecrets = { numbers: [a0], strings: [w.install.admin.name], instants: changeInstants() };
+  const forOthers: EntrySecrets = { numbers: [a0, a1, a2], strings: [w.install.admin.name], instants: changeInstants() };
+  const sid = encodeURIComponent(String(w.subject.id));
+  const oid = encodeURIComponent(String(w.other.id));
+  const routes = [
+    `/api/admin/people/${sid}/history`,
+    `/api/admin/people/${oid}/history`,
+    `/api/admin/people/${sid}/requests`,
+    `/api/admin/people/${sid}`,
+    '/api/admin/people',
+    '/api/admin/pending',
+    '/api/me',
+    '/api/requests',
+    '/api/balance',
+    '/api/calendar?year=2027&month=3',
+    '/api/calendar?year=2028&month=1',
+    '/api/today',
+  ];
+  const pages = [PAGES.home, PAGES.newRequest, PAGES.calendar, PAGES.password, PAGES.adminPending, PAGES.adminPeople, PAGES.adminPerson(w.subject.id), PAGES.adminPerson(w.other.id)];
+
+  const subject = await signInMember(w.subject);
+  const neighbour = await signInMember(w.other);
+  try {
+    for (const [label, actor, secrets] of [
+      ['subject', subject, forSubject],
+      ['neighbour', neighbour, forOthers],
+    ] as const) {
+      for (const route of routes) {
+        const r = await getRaw(actor.api, route);
+        if (route.endsWith('/history')) expect.soft(is2xx(r.status), `ROW-269 ${label}: ${route} is refused (answered ${r.status})`).toBe(false);
+        expect.soft(answerLeaks(r.text, secrets), `ROW-269 ${label}: ${route} (answered ${r.status}) carries no history entry or fact`).toEqual([]);
+      }
+      const opened = await openPage(browser, actor);
+      try {
+        for (const address of pages) {
+          const load = await loadKeeping(opened.page, address);
+          expect.soft(loadLeaks(load, secrets), `ROW-269 ${label}: loading ${address} receives and draws no history entry or fact`).toEqual([]);
+        }
+      } finally {
+        await opened.close();
+      }
+    }
+    const anon = await anonymousApi();
+    try {
+      for (const route of [`/api/admin/people/${sid}/history`, `/api/admin/people/${sid}`]) {
+        const a = await getRaw(anon, route);
+        if (route.endsWith('/history')) expect.soft(is2xx(a.status), `ROW-269 anonymous: ${route} is refused (answered ${a.status})`).toBe(false);
+        expect.soft(answerLeaks(a.text, forOthers), `ROW-269 anonymous: ${route} carries no history entry or fact`).toEqual([]);
+      }
     } finally {
       await anon.dispose();
     }
