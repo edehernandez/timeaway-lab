@@ -1,5 +1,7 @@
 // Purpose: ledger tests for ROW-154, ROW-155 and ROW-156 (INV-001, REQ-002, REQ-007, REQ-022) — every site that decides or forecasts from a balance uses days in effect, exactly the days left minus pending is accepted, and a pending sick request is not pending vacation.
 // Provenance: hand-authored (test-author pass, slice 0, batch test-author-11); fixture data made through the product's public routes by harness.ts (reset, clock, accounts, requests, decisions, cancel, switch), fresh per run; readings of the open response fields from readings.ts.
+// Slice 1, brief test-author-9 (lesson L-1): ROW-156's page cases added beside its data cases — / read in the member's
+// browser through page-figures.ts readOwnFigures, every data assertion kept.
 //
 // Boundary (R6): balance rules, proved at the HTTP harness: the send check is POST /api/requests (201 or a refusal
 // with a plain message, D-029), the refusal message is that refusal's body, the pending forecast is the request's
@@ -22,6 +24,8 @@ import {
   type Member,
 } from './harness';
 import { aucklandMorning, balanceYear, forecastOf, getJson, pendingPageDaysLeft, recordById } from './readings';
+import { saysNumber } from './own-page';
+import { readOwnFigures, type OwnFigures } from './page-figures';
 
 const disposables: { dispose(): Promise<void> }[] = [];
 function keep<T extends { dispose(): Promise<void> }>(x: T): T {
@@ -186,4 +190,57 @@ test('ROW-156.REQ-007.a-pending-sick-request-is-not-pending-vacation', async () 
   const after = balanceYear(await readBalance(session), 2027);
   expect.soft(after?.pending, 'ROW-156: pending vacation is now exactly the vacation, 4').toBe(4);
   expect.soft(after?.daysLeft, 'ROW-156: days left still 4').toBe(4);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-156 — on the own page itself (added, slice 1, test-author-9; lesson L-1)
+// ROW-156 promise: as above — REQ-007 "with the pending vacation days of that year shown beside it" and REQ-002 "sick
+// ROW-156   requests are never checked against or taken from the allowance", A-004, on the page the person sees: with N
+// ROW-156   days left and only a sick request pending, / draws that year's pending vacation figure as 0 beside the N.
+// ROW-156 wrong product: GET /api/balance right, but / sums its pending figure on the client from the listed pending
+// ROW-156   requests whatever their kind — 2027 draws 3 pending (the sick days) before the vacation and 7 (3 + 4) after.
+// ROW-156 given: sickPending (allowance 4, N = 4; a pending sick request Mon 15..Wed 17 March 2027, 3 days). when: the
+// ROW-156   member's browser opens /; then a 4-day vacation Mon 22..Thu 25 March is sent (201) and / is opened again.
+// ROW-156   then: before the vacation, 2027's figures draw 4 (days left) and 0 (pending vacation) and not 3; after it,
+// ROW-156   they draw 4 and not 7 and not 3, and they are not what they were before (the pending figure moved).
+// ROW-156 controls: ROW-156.control.page-draws-the-days-left-with-a-sick-request-pending — / draws 2027's days left 4
+// ROW-156   with the sick request pending: the page and the reading work, untouched by a fault in the pending figure's
+// ROW-156   kind; ROW-156.control.the-sick-request-is-stored-pending shows the harmful case is reached.
+// ROW-156 technique: a decoy per wrong rule — the sick days' 3, and 3 + 4 = 7 — each a number of its own in that
+// ROW-156   year's drawn figures (own-page.ts saysNumber, the years and the requests' days taken out); before and after.
+// ROW-156 cases: ROW-156 target=ROW-156.REQ-007.page-draws-no-pending-vacation-for-a-pending-sick-request control=ROW-156.control.page-draws-the-days-left-with-a-sick-request-pending
+
+const DAYS_156 = ['2027-03-15', '2027-03-17', '2027-03-22', '2027-03-25'];
+
+/** True when the page's figures for `year` draw `n` as a number of its own (the years and the requests' days left out). */
+function drawn156(f: OwnFigures, year: number, n: number): boolean {
+  return saysNumber(f.years[year] ?? '', n, DAYS_156, ['2027', '2028']);
+}
+
+/** The page's figures for `year`, quoted for a message. */
+function shown156(f: OwnFigures, year: number): string {
+  return f.years[year] === null || f.years[year] === undefined ? `(no figures for ${year}; page: "${f.body.slice(0, 400)}")` : `"${f.years[year]}"`;
+}
+
+test('ROW-156.control.page-draws-the-days-left-with-a-sick-request-pending', async ({ browser }) => {
+  const { session } = await sickPending();
+  const f = await readOwnFigures(browser, session, [2027, 2028]);
+  expect.soft(f.status, 'ROW-156 control: / answers the member').toBe(200);
+  expect(drawn156(f, 2027, 4), `ROW-156 control: / draws 2027's days left 4 with the sick request pending: ${shown156(f, 2027)}`).toBe(true);
+});
+
+test('ROW-156.REQ-007.page-draws-no-pending-vacation-for-a-pending-sick-request', async ({ browser }) => {
+  const { session } = await sickPending();
+  const before = await readOwnFigures(browser, session, [2027, 2028]);
+  expect.soft(drawn156(before, 2027, 4), `ROW-156: / draws 2027's days left 4: ${shown156(before, 2027)}`).toBe(true);
+  expect.soft(drawn156(before, 2027, 0), `ROW-156: with only a sick request pending, / draws 2027's pending vacation 0: ${shown156(before, 2027)}`).toBe(true);
+  expect.soft(drawn156(before, 2027, 3), `ROW-156: / does not draw the 3 pending sick days as pending vacation: ${shown156(before, 2027)}`).toBe(false);
+
+  const vac = await post(session, 'vacation', '2027-03-22', '2027-03-25');
+  expect(vac.status, `ROW-156: a vacation of all 4 days left is accepted beside the pending sick request (body: ${vac.body.slice(0, 300)})`).toBe(201);
+  const after = await readOwnFigures(browser, session, [2027, 2028]);
+  expect.soft(after.years[2027] !== before.years[2027], `ROW-156: after the vacation, 2027's drawn figures change (pending 0 → 4): before ${shown156(before, 2027)}, after ${shown156(after, 2027)}`).toBe(true);
+  expect.soft(drawn156(after, 2027, 4), `ROW-156: / draws 2027's days left and pending vacation 4: ${shown156(after, 2027)}`).toBe(true);
+  expect.soft(drawn156(after, 2027, 7), `ROW-156: / does not draw 3 + 4 = 7 (the sick days counted as pending vacation): ${shown156(after, 2027)}`).toBe(false);
+  expect.soft(drawn156(after, 2027, 3), `ROW-156: / does not draw the 3 sick days in 2027's figures: ${shown156(after, 2027)}`).toBe(false);
 });

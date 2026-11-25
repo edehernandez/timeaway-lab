@@ -1,5 +1,7 @@
 // Purpose: ledger tests for ROW-146, ROW-147 and ROW-148 (REQ-002, REQ-007, REQ-011, REQ-013, REQ-016, REQ-023) — after New Year both new years have the allowance with no admin action; an account created in any month or switched back on after New Years has both years; an allowance change reaches later years by the rule of A-046 and A-047.
 // Provenance: hand-authored (test-author pass, slice 0, batch test-author-10); fixture data made through the product's public routes by harness.ts and team-calendar.ts, fresh per run; instants worked out by the tests' own Intl oracle.
+// Slice 1, brief test-author-9 (lesson L-1): ROW-146's page cases added beside its data cases — / read in the member's
+// browser through page-figures.ts readOwnFigures, every data assertion kept.
 //
 // Boundary (R6): rules at the HTTP harness — GET /api/balance's years and days left, POST /api/requests, the admin's
 // POST /api/admin/accounts/:id/allowance {allowance, startsNextYear} and /switch.
@@ -7,6 +9,8 @@
 // these cases turn on the year's change and not on the zone (ROW-133 holds the zone's midnight).
 import { test, expect } from '@playwright/test';
 import { createMember, switchAccount, type AccountId, type Actor, type Member } from './harness';
+import { saysNumber } from './own-page';
+import { readOwnFigures, type OwnFigures } from './page-figures';
 import {
   addMember,
   AUCKLAND,
@@ -74,6 +78,65 @@ test('ROW-146.REQ-023.after-new-year-both-new-years-have-the-allowance', async (
   const a = await trySend(actor, { kind: 'vacation', firstDay: '2029-01-08', lastDay: '2029-01-09' });
   expect.soft(isAccepted(a), `ROW-146: a vacation in the new next year is accepted (answered ${a.status} ${a.text.slice(0, 160)})`).toBe(true);
   expect.soft((await yearFigures(actor, 2029))?.pending, 'ROW-146: 2029 shows its 2 pending days').toBe(2);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-146 — on the own page itself (added, slice 1, test-author-9; lesson L-1)
+// ROW-146 promise: as above — REQ-007 "A person sees their vacation days left for the current year and for the next
+// ROW-146   year" (fail-if (1) "either year's days left is missing"), REQ-023 and D-025, on the page the person sees: after
+// ROW-146   New Year in the team zone, with no admin action, / draws both new years' days left from the allowance.
+// ROW-146 wrong product: GET /api/balance right, but / keeps drawing the years the account was created in (2027 and
+// ROW-146   2028), or draws the new next year 2029 with no allowance (0 days left) — every data case stays green.
+// ROW-146 given: decemberMember (allowance 23, an approved vacation 10..11 January 2028). when: the member's browser
+// ROW-146   opens / on 15 December 2027; the clock moves to 1 January 2028 15:00 team time and it opens / again; then a
+// ROW-146   vacation 8..9 January 2029 is sent and it opens / once more. then: on 15 December / draws no figures for 2029;
+// ROW-146   on 1 January it draws 2028's days left 21 (23 − 2) and 2029's 23; after the send 2029's figures draw 23 and
+// ROW-146   its 2 pending days, and not 21 (the pending days subtracted).
+// ROW-146 controls: ROW-146.control.page-before-new-year-draws-both-years — on 15 December / draws 2027's 23 and
+// ROW-146   2028's 21: the page, the reading and the approval work where no year has turned.
+// ROW-146 technique: before and after the year's change, the clock's origin moved with nothing else done; each figure
+// ROW-146   a number of its own in that year's drawn figures (own-page.ts saysNumber, the years taken out), every
+// ROW-146   expected value worked out here from the test's own data.
+// ROW-146 cases: ROW-146 target=ROW-146.REQ-007.page-after-new-year-draws-both-new-years control=ROW-146.control.page-before-new-year-draws-both-years
+
+/** True when the page's figures for `year` draw `n` as a number of its own (the years themselves left out). */
+function drawn146(f: OwnFigures, year: number, n: number): boolean {
+  return saysNumber(f.years[year] ?? '', n, [], ['2027', '2028', '2029', '2030']);
+}
+
+/** The page's figures for `year`, quoted for a message. */
+function shown146(f: OwnFigures, year: number): string {
+  return f.years[year] === null || f.years[year] === undefined ? `(no figures for ${year}; page: "${f.body.slice(0, 400)}")` : `"${f.years[year]}"`;
+}
+
+test('ROW-146.control.page-before-new-year-draws-both-years', async ({ browser }) => {
+  const { actor } = await decemberMember();
+  const f = await readOwnFigures(browser, actor, [2027, 2028]);
+  expect.soft(f.status, 'ROW-146 control: / answers the member').toBe(200);
+  expect.soft(drawn146(f, 2027, 23), `ROW-146 control: on 15 December 2027 / draws 2027's days left 23: ${shown146(f, 2027)}`).toBe(true);
+  expect.soft(drawn146(f, 2028, 21), `ROW-146 control: on 15 December 2027 / draws 2028's days left 23 − 2 = 21: ${shown146(f, 2028)}`).toBe(true);
+});
+
+test('ROW-146.REQ-007.page-after-new-year-draws-both-new-years', async ({ browser }) => {
+  const { member, actor } = await decemberMember();
+  const before = await readOwnFigures(browser, actor, [2028, 2029], 5_000);
+  expect.soft(before.years[2029], `ROW-146: on 15 December 2027 / draws no figures for 2029 yet: ${shown146(before, 2029)}`).toBeNull();
+
+  await setTeamClock(AUCKLAND, '2028-01-01', '15:00');
+  const again = await signInAgain(member);
+  const after = await readOwnFigures(browser, again, [2028, 2029]);
+  for (const year of [2028, 2029]) {
+    expect.soft(after.years[year] !== null, `ROW-146: on 1 January 2028 / draws ${year}'s days left: ${shown146(after, year)}`).toBe(true);
+  }
+  expect.soft(drawn146(after, 2028, 21), `ROW-146: on 1 January 2028 / draws 2028's days left 23 − 2 = 21: ${shown146(after, 2028)}`).toBe(true);
+  expect.soft(drawn146(after, 2029, 23), `ROW-146: on 1 January 2028 / draws the new next year 2029 with its allowance 23: ${shown146(after, 2029)}`).toBe(true);
+
+  const a = await trySend(again, { kind: 'vacation', firstDay: '2029-01-08', lastDay: '2029-01-09' });
+  expect(isAccepted(a), `ROW-146: a vacation in the new next year is accepted (answered ${a.status} ${a.text.slice(0, 160)})`).toBe(true);
+  const sent = await readOwnFigures(browser, again, [2028, 2029]);
+  expect.soft(drawn146(sent, 2029, 23), `ROW-146: after the send / still draws 2029's days left 23: ${shown146(sent, 2029)}`).toBe(true);
+  expect.soft(drawn146(sent, 2029, 2), `ROW-146: / draws 2029's 2 pending days beside it: ${shown146(sent, 2029)}`).toBe(true);
+  expect.soft(drawn146(sent, 2029, 21), `ROW-146: / does not draw 23 − 2 = 21 for 2029: ${shown146(sent, 2029)}`).toBe(false);
 });
 
 // ---------------------------------------------------------------------------------------------------

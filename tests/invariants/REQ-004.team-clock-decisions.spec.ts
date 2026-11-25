@@ -1,5 +1,7 @@
 // Purpose: ledger tests for ROW-133 (REQ-004, REQ-007, REQ-010, REQ-011, REQ-016, REQ-021) — every decision on today or the current year reads the team time zone, at 23:30 and 00:30 team time in summer and winter time, and at New Year in both offset directions.
 // Provenance: hand-authored (test-author pass, slice 0, batch test-author-10); fixture data made through the product's public routes by harness.ts and team-calendar.ts, fresh per run; every instant worked out by the tests' own Intl oracle, never the machine's clock.
+// Slice 1, brief test-author-9 (lesson L-1): the days-left years' page cases added beside their data case — / read in
+// the member's browser (own zone UTC) through journey-pages.ts yearFigures, every data assertion kept.
 //
 // Boundary (R6): the send window, the days-left years, the admin cancel, the switch-off refusal and cut-off and the
 // year an allowance change starts are rules, proved at the HTTP harness; "the cancel action shown" is paint, proved in
@@ -13,8 +15,10 @@
 // Wednesday, so the Monday of its week, its Tuesday and its Friday are weekdays. The New Year moments: 00:30 on
 // 1 January 2027 in Auckland (UTC still 2026) and 23:30 on 31 December 2026 in Los Angeles (UTC already 2027), and
 // their same-year controls.
-import { test, expect } from '@playwright/test';
-import { PAGES } from './harness';
+import { test, expect, type Browser } from '@playwright/test';
+import { PAGES, type Actor } from './harness';
+import { yearFigures as drawnYearFigures } from './journey-pages';
+import { saysNumber } from './own-page';
 import {
   addDays,
   addMember,
@@ -162,6 +166,86 @@ test('ROW-133.REQ-007.days-left-years-are-the-team-years', async () => {
     expect.soft(next?.daysLeft, `${say}: days left are shown for the team's next year ${year + 1}`).toBe(21);
     expect.soft(await yearFigures(actor, year - 1), `${say}: no figure for ${year - 1}, the year before the team year`).toBeUndefined();
     expect.soft(await yearFigures(actor, year + 2), `${say}: no figure for ${year + 2}`).toBeUndefined();
+    await disposeAll();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-133 — the days-left years on the own page itself (added, slice 1, test-author-9; lesson L-1)
+// ROW-133 promise: as above, for "the days-left years" — REQ-007 / A-027 (the person sees the current and the next
+// ROW-133   year's days left), REQ-004 fail-if (6) (the current and the next year read from the team-zone date), D-007
+// ROW-133   ("today is computed on the server, never in the browser") — on the page the person sees: / draws days left
+// ROW-133   for the team year and for the team's next year.
+// ROW-133 wrong product: GET /api/balance right, but / picks or labels its years from the browser's clock or a UTC
+// ROW-133   date: at Auckland's 1 January 2027 00:30 (UTC still 2026) it draws 2026 and 2027, at Los Angeles' 31 December
+// ROW-133   2026 23:30 (UTC already 2027) it draws 2027 and 2028 — the data case stays green.
+// ROW-133 given: a fresh team in the moment's zone with the clock at the moment, a member with allowance 21. when: the
+// ROW-133   member's browser, its own zone UTC, opens /. then: / draws figures for the team year and for the team's next
+// ROW-133   year, each with 21 days left.
+// ROW-133 controls: ROW-133.control.page-draws-the-team-years-at-midday — at Auckland 13:30 on 17 February 2027, where
+// ROW-133   the team and UTC dates agree, / draws 2027 and 2028 with 21: the page and the reading work, and a UTC-reading
+// ROW-133   page passes it too.
+// ROW-133 technique: the clock's origin — the New Year moments in both offset directions, the browser's zone at UTC so
+// ROW-133   a page that works the year out in the browser is caught as well as a server reading UTC; the day moments as
+// ROW-133   same-year checks. Each figure a number of its own in that year's drawn figures (own-page.ts saysNumber, the
+// ROW-133   years taken out). That no third year is drawn stays the data case's: a year's label may stand elsewhere on a
+// ROW-133   page, so this reading proves presence only.
+// ROW-133 cases: ROW-133 target=ROW-133.REQ-007.page-draws-days-left-for-the-team-years control=ROW-133.control.page-draws-the-team-years-at-midday
+
+/** / opened as `actor` in a browser whose own zone is UTC; each of the two years' drawn figures (null when not drawn), read after a bounded wait. */
+async function drawnFigures(browser: Browser, actor: Actor, years: [number, number], timeoutMs = 10_000): Promise<{ status: number; years: Record<number, string | null>; body: string }> {
+  const opened = await openPageIn(browser, actor, { timezoneId: 'UTC' });
+  try {
+    const response = await opened.page.goto(PAGES.home);
+    await opened.page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    const [a, b] = years;
+    let last: Record<number, string | null> = { [a]: null, [b]: null };
+    await expect
+      .poll(async () => {
+        last = { [a]: await drawnYearFigures(opened.page, a, b), [b]: await drawnYearFigures(opened.page, b, a) };
+        return last[a] !== null && last[b] !== null;
+      }, { timeout: timeoutMs })
+      .toBe(true)
+      .catch(() => undefined);
+    const body = (await opened.page.locator('body').innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+    return { status: response?.status() ?? 0, years: last, body };
+  } finally {
+    await opened.close();
+  }
+}
+
+/** True when the drawn figures for `year` carry `n` as a number of its own (the years around it left out). */
+function drawsNumber(years: Record<number, string | null>, year: number, n: number): boolean {
+  return saysNumber(years[year] ?? '', n, [], [year - 1, year, year + 1, year + 2].map(String));
+}
+
+test('ROW-133.control.page-draws-the-team-years-at-midday', async ({ browser }) => {
+  const m: Moment = { label: 'auckland-summer-13:30', zone: AUCKLAND, today: '2027-02-17', time: '13:30' };
+  const { iso, say } = at(m);
+  expect(utcDateOf(iso), 'ROW-133 control setup: the team and UTC dates agree').toBe(m.today);
+  const team = await startTeam({ zone: m.zone, now: iso });
+  const { actor } = await addMember(team, { allowance: 21 });
+  const f = await drawnFigures(browser, actor, [2027, 2028]);
+  expect.soft(f.status, `${say}: / answers the member`).toBe(200);
+  for (const year of [2027, 2028]) {
+    expect.soft(drawsNumber(f.years, year, 21), `${say}: / draws ${year}'s days left 21: ${f.years[year] ?? `(none; page: "${f.body.slice(0, 300)}")`}`).toBe(true);
+  }
+});
+
+test('ROW-133.REQ-007.page-draws-days-left-for-the-team-years', async ({ browser }) => {
+  for (const m of [...NEW_YEAR_MOMENTS, ...DAY_MOMENTS]) {
+    const { iso, say } = at(m);
+    const team = await startTeam({ zone: m.zone, now: iso });
+    const { actor } = await addMember(team, { allowance: 21 });
+    const year = yearOf(m.today);
+    const f = await drawnFigures(browser, actor, [year, year + 1]);
+    for (const [y, which] of [
+      [year, 'the team year'],
+      [year + 1, "the team's next year"],
+    ] as const) {
+      expect.soft(f.years[y] !== null, `${say}: / draws days left for ${which} ${y}: ${f.years[y] ?? `(none; page: "${f.body.slice(0, 300)}")`}`).toBe(true);
+      expect.soft(drawsNumber(f.years, y, 21), `${say}: / draws ${which} ${y}'s days left 21: ${f.years[y] ?? '(none)'}`).toBe(true);
+    }
     await disposeAll();
   }
 });
