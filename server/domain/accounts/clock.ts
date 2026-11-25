@@ -44,17 +44,35 @@ export function isTimeZone(zone: unknown): zone is string {
 }
 
 /**
- * CON-003, D-013, ROW-136: true when `zone` is a NAMED time zone this runtime knows ("Pacific/Auckland", "UTC") —
- * never a fixed offset ("+05:30", "UTC+2", "GMT-3"), which Intl would also take. A name is letters, digits, "_", "-",
- * "+" in "/"-separated parts that start with a letter, and the runtime resolves it to a name, not to an offset.
+ * CON-003, ROW-136, A-054 (D-054): the zone names that are a fixed offset by name, upper-cased — the UTC and GMT
+ * aliases and the legacy fixed names. The Etc/ zones and the offset spellings are refused by their shape below.
+ */
+const FIXED_OFFSET_NAMES = new Set(['UTC', 'UCT', 'UT', 'GMT', 'GMT0', 'GMT+0', 'GMT-0', 'GREENWICH', 'UNIVERSAL', 'ZULU', 'EST', 'MST', 'HST', 'FACTORY'])
+
+/** CON-003, ROW-136, A-054: true when `name` (as given, or as the runtime resolved it) is a fixed offset by name, in any letter case. */
+function isFixedOffsetName(name: string): boolean {
+  const upper = name.toUpperCase()
+  if (FIXED_OFFSET_NAMES.has(upper)) return true
+  if (upper.startsWith('ETC/')) return true
+  // An offset spelling: "+05:30", "-06:00", "UTC-6", "GMT+2", "UTC-06:00", "Z+1".
+  return /^(UTC|GMT|UT|Z)?[+-]/.test(upper)
+}
+
+/**
+ * CON-003, D-013, ROW-136, A-054 (D-054): true when `zone` is a NAMED geographic time zone this runtime knows
+ * ("Pacific/Auckland", "America/Guatemala"), with or without daylight saving — never a fixed offset, which Intl would
+ * also take: an offset spelling ("+05:30", "UTC+2", "GMT-3", "GMT+0"), an Etc/ zone ("Etc/GMT+6", "Etc/UTC"), a UTC or
+ * GMT alias (UTC, UCT, GMT, GMT0, Greenwich, Universal, Zulu) or a legacy fixed name (EST, MST, HST), in any letter
+ * case, and whether the name is refused as given or as the runtime resolves it. The rule is by name, never by
+ * watching the offset over a year, so a geographic zone that keeps one offset all year is accepted.
  */
 export function isNamedTimeZone(zone: unknown): zone is string {
   if (typeof zone !== 'string' || zone !== zone.trim()) return false
   if (!/^[A-Za-z][A-Za-z0-9_+-]*(\/[A-Za-z][A-Za-z0-9_+-]*)*$/.test(zone)) return false
-  if (/^(UTC|GMT|UT|Z)[+-]/i.test(zone)) return false
+  if (isFixedOffsetName(zone)) return false
   try {
     const resolved = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).resolvedOptions().timeZone
-    return typeof resolved === 'string' && !/^[+-]/.test(resolved)
+    return typeof resolved === 'string' && resolved !== '' && !isFixedOffsetName(resolved)
   } catch {
     return false
   }

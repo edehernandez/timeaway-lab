@@ -146,17 +146,6 @@ export function isFormPost(event: H3Event): boolean {
   return (getRequestHeader(event, 'content-type') ?? '').toLowerCase().startsWith('application/x-www-form-urlencoded')
 }
 
-/** True when the request carries no Origin, or the product's own (a form posted from another site is refused). */
-export function fromOwnOrigin(event: H3Event): boolean {
-  const origin = getRequestHeader(event, 'origin')
-  if (origin === undefined || origin === '') return true
-  try {
-    return new URL(origin).host === getRequestHost(event, { xForwardedHost: false })
-  } catch {
-    return false
-  }
-}
-
 /** REQ-014 arm 5: signing out ends the session at once (its row is deleted) and clears the cookie. */
 export function signOut(event: H3Event): void {
   const { user, presented } = readSession(event)
