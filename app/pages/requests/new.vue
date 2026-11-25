@@ -1,6 +1,7 @@
 <!-- Purpose: the send-a-request page, /requests/new (D-029, REQ-001, ROW-281) — a signed-in person asks for days off
      for themselves: the kind (vacation or sick, nothing preselected), the first day and the last day, and Send.
-     The server decides everything that counts (the person, the weekdays, whether days are free); the page only sends. -->
+     The server decides everything that counts (the person, the weekdays, whether days are free); the page only sends.
+     The form posts (ROW-181, D-053): a press before the scripts have run never puts the kind in the address. -->
 <script setup lang="ts">
 // REQ-001: the request is always the sender's own; the body carries no person (D-029 POST /api/requests).
 const kind = ref<'' | 'vacation' | 'sick'>('')
@@ -42,7 +43,7 @@ async function submit() {
 <template>
   <section>
     <h1>Send a request</h1>
-    <form @submit.prevent="submit">
+    <form method="post" @submit.prevent="submit">
       <fieldset>
         <legend>Kind</legend>
         <label class="choice"><input v-model="kind" type="radio" name="kind" value="vacation"> Vacation</label>

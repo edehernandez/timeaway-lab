@@ -82,7 +82,7 @@ async function save() {
   <div class="backdrop" @keydown="onKey">
     <div role="dialog" aria-modal="true" :aria-labelledby="`${id}-title`" class="dialog">
       <h2 :id="`${id}-title`">{{ titles[props.action] }}: {{ props.person.name }}</h2>
-      <form autocomplete="off" @submit.prevent="save">
+      <form autocomplete="off" method="post" @submit.prevent="save">
         <p v-if="props.action === 'name'">
           <label :for="`${id}-name`">Name</label>
           <input :id="`${id}-name`" ref="first" v-model="name" type="text" autocomplete="off" maxlength="60" required>

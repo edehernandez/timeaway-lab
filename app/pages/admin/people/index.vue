@@ -223,7 +223,7 @@ async function create() {
     />
 
     <h2>Create an account</h2>
-    <form autocomplete="off" @submit.prevent="create">
+    <form autocomplete="off" method="post" @submit.prevent="create">
       <p>
         <label for="new-name">Name</label>
         <input id="new-name" v-model="name" type="text" autocomplete="off" maxlength="60" required>

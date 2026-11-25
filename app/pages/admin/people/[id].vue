@@ -222,7 +222,7 @@ function saveAllowance() {
     />
 
     <h2>Name</h2>
-    <form @submit.prevent="rename">
+    <form method="post" @submit.prevent="rename">
       <p>
         <label for="person-name">Name</label>
         <input id="person-name" v-model="newName" type="text" autocomplete="off" maxlength="60" required>
@@ -231,7 +231,7 @@ function saveAllowance() {
     </form>
 
     <h2>Email</h2>
-    <form @submit.prevent="changeEmail">
+    <form method="post" @submit.prevent="changeEmail">
       <p>
         <label for="person-email">Email</label>
         <input id="person-email" v-model="newEmail" type="email" autocomplete="off" required>
@@ -243,7 +243,7 @@ function saveAllowance() {
     <p v-if="own">You change your own password on the <NuxtLink to="/password">password page</NuxtLink>, giving your current one.</p>
     <!-- ROW-234 (REQ-015): the form names the person it is for as its username, so a password manager ties the
          password typed here to this person, never to the admin's own saved sign-in. -->
-    <form v-else autocomplete="off" @submit.prevent="setPassword">
+    <form v-else autocomplete="off" method="post" @submit.prevent="setPassword">
       <p>
         <label for="person-password-account">Account</label>
         <input id="person-password-account" :value="person.email" type="email" name="username" autocomplete="username" readonly>
@@ -260,7 +260,7 @@ function saveAllowance() {
     </form>
 
     <h2>Allowance</h2>
-    <form @submit.prevent="saveAllowance">
+    <form method="post" @submit.prevent="saveAllowance">
       <p>
         <label for="personAllowance">Allowance (days a year)</label>
         <input id="personAllowance" v-model.number="allowance" type="number" min="0" max="260" step="1" required>
