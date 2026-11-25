@@ -1,5 +1,5 @@
 // Purpose: ledger tests for ROW-091, ROW-092, ROW-093, ROW-094 and ROW-096 (REQ-019) — an approved request cancelled with weekdays before today, by the admin's cancel or by a switch-off, stays approved, stops counting and showing from the cancel day, records the cancel day and who cancelled, shows the cancelled days on the person's own list and keeps its days as sent.
-// Provenance: hand-authored (test-author pass, slice 0, batch test-author-6); fixture data made through the product's public routes by harness.ts (reset, clock, accounts, requests, approve, the admin's cancel, switch off and back on), read through records.ts, fresh per run.
+// Provenance: hand-authored (test-author pass, slice 0, batch test-author-6); fixture data made through the product's public routes by harness.ts (reset, clock, accounts, requests, approve, the admin's cancel, switch off and back on), read through records.ts, fresh per run; ROW-094's page cases added in slice 1 by batch test-author-8 (lesson L-1: the drawn row read on the person's page / beside the API), through page-figures.ts and own-page.ts.
 //
 // Boundary (R6): a lifecycle rule, at the HTTP harness — the person's own requests (GET /api/requests, the data of
 // the person's page), the admin's view of the person's requests (GET /api/admin/people/:id/requests), the balance
@@ -55,6 +55,8 @@ import {
   type Rec,
   type Who,
 } from './records';
+import { saysDay, saysState } from './own-page';
+import { readOwnRows, type OwnSpec } from './page-figures';
 
 const TZ = DEFAULT_TIME_ZONE;
 const T_SEND = teamInstant('2027-03-01', '09:00', TZ);
@@ -297,7 +299,7 @@ test('ROW-093.REQ-019.the-cancel-day-and-who-cancelled-are-recorded', async () =
 // ROW-094   with its days, and without a cancel day.
 // ROW-094 technique: the page's own data, at the HTTP boundary (the boundary rule: content, not paint); before and
 // ROW-094   after; the weekend cases give a cancel day no other value equals.
-// ROW-094 cases: ROW-094 target=ROW-094.REQ-019.the-persons-own-list-shows-the-cancelled-days control=ROW-094.control.before-the-cancels-the-own-list-shows-the-approved-request
+// ROW-094 (the row's cases: line stands with the page argument at the end of this file: the row is about the page.)
 test('ROW-094.control.before-the-cancels-the-own-list-shows-the-approved-request', async () => {
   const sc = await scenario('approved');
   for (const c of sc.cases) {
@@ -357,4 +359,72 @@ test('ROW-096.REQ-019.the-days-as-sent-can-still-be-told-after-the-cancel', asyn
   await check('right after the cancel');
   await backOn(sc);
   await check('with the switched-off ones back on');
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-094 — on the person's page itself (added, slice 1, test-author-8; lesson L-1)
+// ---------------------------------------------------------------------------------------------------
+// The ROW-094 cases above read GET /api/requests, the data of the person's page; a page that draws only the state and
+// the days as sent (or the shortened range alone) keeps them green. These cases open / in each person's browser
+// (engine door) and read the request's drawn row (page-figures.ts readOwnRows: the one list item carrying its first
+// and last day, so a column header such as "Cancelled" is never read as the row's word); states and days are read
+// with own-page.ts saysState and saysDay.
+//
+// ROW-094 promise: REQ-019 fail-if (4) "the person's page does not show the cancelled days as cancelled"; A-030 ("the
+// ROW-094   cancelled days shown as cancelled on the person's page … the same when an account is switched off"); REQ-019
+// ROW-094   (the request stays approved with its days in effect ending the day before the cancel); D-040 (the cancel
+// ROW-094   takes effect from the first Monday to Friday day on or after the team's today). The row's cases: run under
+// ROW-094   both the admin's cancel and a switch-off of the account.
+// ROW-094 wrong product: the own list's data carries the cancel day, but the page draws the request as plain approved
+// ROW-094   with its days as sent (the cancel invisible), draws it shortened to end 9 March (the cancelled days vanish),
+// ROW-094   or draws the whole request cancelled; or draws the cancel for the admin's cancel and not for a switch-off.
+// ROW-094 given: the file header's scenario — A1 and A2 (Mon 8..Fri 12 March 2027) cancelled on Wed 10 March by the
+// ROW-094   admin's cancel and by a switch-off, so cancelled from 10 March; B1 and B2 (Thu 11..Wed 17 March) on Sat 13
+// ROW-094   March, so cancelled from Mon 15 March; the neighbour N (8..12 March) never cancelled. when: the cancels are
+// ROW-094   made, the switched-off persons are switched back on, and each person's browser opens /. then: each case's row
+// ROW-094   — still drawn with its first and last day as sent — draws approved, draws cancelled, and draws the day the
+// ROW-094   cancel takes effect from (10 March for A1 and A2, 15 March for B1 and B2); N's row draws approved and not
+// ROW-094   cancelled.
+// ROW-094 controls: ROW-094.control.page-draws-the-approved-request-before-the-cancels — after the approvals each
+// ROW-094   person's / draws the request's row approved and not cancelled, and B1's and B2's rows draw no 15 March: the
+// ROW-094   rows are reached and read, and what the target asks for is absent before the cancel.
+// ROW-094 technique: before and after; both doors; the weekend cases give a cancel-from day (15 March) that is no
+// ROW-094   act's date and none of the days as sent; the neighbour as the isolation decoy.
+// ROW-094 cases: ROW-094 target=ROW-094.REQ-019.the-persons-page-draws-the-cancelled-days-as-cancelled control=ROW-094.control.page-draws-the-approved-request-before-the-cancels
+
+function ownSpec(label: string, spec: RequestSpec): OwnSpec {
+  return { label, firstDay: spec.firstDay, lastDay: spec.lastDay };
+}
+
+test('ROW-094.control.page-draws-the-approved-request-before-the-cancels', async ({ browser }) => {
+  const sc = await scenario('approved');
+  for (const c of sc.cases) {
+    const read = await readOwnRows(browser, c.actor!, [ownSpec(c.label, c.spec)]);
+    const row = read.rows[0];
+    const w = `${where('ROW-094 control', c)} on /`;
+    expect.soft(row.found, `${w} is drawn; page: "${read.body.slice(0, 500)}"`).toBe(true);
+    expect.soft(saysState(row.text, 'approved'), `${w} draws approved: "${row.text}"`).toBe(true);
+    expect.soft(saysState(row.text, 'cancelled'), `${w} draws nothing cancelled before the cancel: "${row.text}"`).toBe(false);
+    if (c.label.startsWith('B')) expect.soft(saysDay(row.text, c.cancelDay), `${w} draws no ${c.cancelDay} before the cancel: "${row.text}"`).toBe(false);
+  }
+});
+
+test('ROW-094.REQ-019.the-persons-page-draws-the-cancelled-days-as-cancelled', async ({ browser }) => {
+  const sc = await scenario('cancelled');
+  await backOn(sc);
+  for (const c of sc.cases) {
+    const read = await readOwnRows(browser, c.actor!, [ownSpec(c.label, c.spec)]);
+    const row = read.rows[0];
+    const w = `${where('ROW-094', c)} on the person's page /`;
+    expect.soft(row.found, `${w} is still drawn with its first and last day as sent; page: "${read.body.slice(0, 500)}"`).toBe(true);
+    expect.soft(saysState(row.text, 'approved'), `${w} draws its days in effect approved: "${row.text}"`).toBe(true);
+    expect.soft(saysState(row.text, 'cancelled'), `${w} draws its cancelled days as cancelled: "${row.text}"`).toBe(true);
+    expect.soft(saysDay(row.text, c.cancelDay), `${w} draws the day the cancel takes effect from, ${c.cancelDay}: "${row.text}"`).toBe(true);
+  }
+  const n = sc.neighbour;
+  const read = await readOwnRows(browser, n.actor, [ownSpec('N', A_SPEC)]);
+  const row = read.rows[0];
+  expect.soft(row.found, `ROW-094: the neighbour's request is drawn on their /; page: "${read.body.slice(0, 500)}"`).toBe(true);
+  expect.soft(saysState(row.text, 'approved'), `ROW-094: the neighbour's row draws approved: "${row.text}"`).toBe(true);
+  expect.soft(saysState(row.text, 'cancelled'), `ROW-094: the neighbour's row, never cancelled, draws nothing cancelled: "${row.text}"`).toBe(false);
 });

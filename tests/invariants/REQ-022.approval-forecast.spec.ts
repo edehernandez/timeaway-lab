@@ -1,5 +1,5 @@
 // Purpose: ledger tests for ROW-106, ROW-107 and ROW-108 (REQ-022) — the admin may approve a vacation that leaves the days left below zero, and the pending page shows, labelled, the days left each approval would leave, equal to the days left after that approval, in the request's own year.
-// Provenance: hand-authored (test-author pass, slice 0, batch test-author-6); fixture data made through the product's public routes by harness.ts (reset, clock, accounts, allowances, requests, the admin's two-step approve), read through records.ts, fresh per run.
+// Provenance: hand-authored (test-author pass, slice 0, batch test-author-6); fixture data made through the product's public routes by harness.ts (reset, clock, accounts, allowances, requests, the admin's two-step approve), read through records.ts, fresh per run; ROW-108's page cases added in slice 1 by batch test-author-8 (lesson L-1: the drawn figures read on /admin/pending beside the API), through page-figures.ts and own-page.ts.
 //
 // Boundaries (R6): the approval rule and the forecast's value are rules — at the HTTP harness (the two steps of
 // approve, D-029; GET /api/admin/pending; GET /api/balance). "The pending page shows … labelled as such" is content on
@@ -40,6 +40,8 @@ import {
   teamInstant,
   textAbout,
 } from './records';
+import { saysNumber } from './own-page';
+import { readPendingPage, rowLabelled, type PendingPageRead, type PendingSpec, type ReadRow } from './page-figures';
 
 const TZ = DEFAULT_TIME_ZONE;
 const T_NOW = teamInstant('2027-03-01', '09:00', TZ);
@@ -201,7 +203,7 @@ test('ROW-107.REQ-022.the-pending-page-shows-the-labelled-days-left-each-approva
 // ROW-108   pending for 2027 and 21 with 2 pending for 2028.
 // ROW-108 technique: independent golden figures (computed here from the fixture, never read from the product), two
 // ROW-108   pending requests in one year as the row names, and a second year with a different days left.
-// ROW-108 cases: ROW-108 target=ROW-108.REQ-022.the-forecast-equals-the-days-left-after-that-approval-in-its-year control=ROW-108.control.the-setup-balances-and-entries-read-as-built
+// ROW-108 (the row's cases: line stands with the page argument at the end of this file: the row is about the page.)
 async function twoYears() {
   const admin = await start();
   const rhea = await member(admin, 'Rhea', 30);
@@ -248,4 +250,102 @@ test('ROW-108.REQ-022.the-forecast-equals-the-days-left-after-that-approval-in-i
 
   await approve(f.admin, f.q);
   expect.soft(daysLeftIn(await readBalance(f.rhea.actor), 2028), "ROW-108: after approving Q, Rhea's 2028 days left equals Q's shown figure, 19").toBe(19);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-108 — on the pending page itself (added, slice 1, test-author-8; lesson L-1)
+// ---------------------------------------------------------------------------------------------------
+// The ROW-108 cases above read the forecast from GET /api/admin/pending; a page that works its forecast out on the
+// client (days left minus every pending day of the year, or from the current year's days left) keeps them green.
+// These cases open /admin/pending in the admin's browser (engine door) and read each request's drawn row
+// (page-figures.ts readPendingPage: the person's name and the request's first day, bounded by the other requests);
+// a figure is a number of its own once the row's days, times of day, names and years are taken out (own-page.ts).
+//
+// ROW-108 promise: REQ-022 fail-if (3) "the shown figure differs from the days left after the approval" — the figure
+// ROW-108   the pending page shows; REQ-022 "before approving, the pending page shows, labelled as such, the days left
+// ROW-108   the approval would leave" (A-032); INV-001 (the forecast equals the value after that approval). The row's
+// ROW-108   cases: with two pending vacations in one year, the forecast for one equals the days left after approving
+// ROW-108   that one alone; for a next-year request, the forecast uses next year's days left.
+// ROW-108 wrong product: the pending data right, but the page draws days left minus ALL that year's pending days (18
+// ROW-108   on both 2027 rows), or works a next-year row's forecast from the current year's days left (25 instead of 19),
+// ROW-108   or keeps drawing P2's first forecast (22) after P1 is approved.
+// ROW-108 given: twoYears() — Rhea, allowance 30 for 2027 and 24 from 2028, 3 days approved in each year (27 and 21
+// ROW-108   left); pending P1 Mon 15..Thu 18 March 2027 (4), P2 Mon 22..Fri 26 March 2027 (5), Q Mon 14..Tue 15 February
+// ROW-108   2028 (2). when: the admin's browser opens /admin/pending; the admin approves P1 alone; the page is opened
+// ROW-108   again; the admin approves Q. then: before, P1's row draws 23 and not 18, P2's draws 22 and not 18, Q's draws
+// ROW-108   19 and not 25; after approving P1, Rhea's 2027 days left is 23, the figure P1's row drew; the page no longer
+// ROW-108   draws P1, P2's row draws 18 and not 22, Q's still 19; after approving Q, Rhea's 2028 days left is 19, the
+// ROW-108   figure Q's row drew.
+// ROW-108 controls: ROW-108.control.page-draws-the-three-pending-rows — the page draws P1, P2 and Q, each with its
+// ROW-108   year's days left (27, 27, 21): the rows are reached and the figures read.
+// ROW-108 technique: independent golden figures (worked out here from the fixture, never read from the product),
+// ROW-108   two pending requests in one year as the row names, a second year with a different days left; before and
+// ROW-108   after each approval, the drawn figure compared with the balance the approval leaves.
+// ROW-108 cases: ROW-108 target=ROW-108.REQ-022.page-draws-the-forecast-each-approval-leaves-in-its-year control=ROW-108.control.page-draws-the-three-pending-rows
+
+function specs108(name: string): PendingSpec[] {
+  return [
+    { label: 'P1', name, firstDay: '2027-03-15' },
+    { label: 'P2', name, firstDay: '2027-03-22' },
+    { label: 'Q', name, firstDay: '2028-02-14' },
+  ];
+}
+/** Every day a row of twoYears() may draw: the pending requests' days and the send date. */
+const DAYS_108 = ['2027-03-15', '2027-03-18', '2027-03-22', '2027-03-26', '2028-02-14', '2028-02-15', '2027-03-01'];
+
+function reader108(f: Awaited<ReturnType<typeof twoYears>>, read: PendingPageRead) {
+  const lit = [f.rhea.m.name, f.rhea.m.email, '2027', '2028'];
+  return {
+    row: (label: string) => rowLabelled(read.rows, label),
+    says: (row: ReadRow, n: number) => saysNumber(row.text, n, DAYS_108, lit),
+    quote: (row: ReadRow) => (row.found ? `"${row.text}"` : `(not drawn; page: "${read.body.slice(0, 500)}")`),
+  };
+}
+
+test('ROW-108.control.page-draws-the-three-pending-rows', async ({ browser }) => {
+  const f = await twoYears();
+  const read = await readPendingPage(browser, f.admin, specs108(f.rhea.m.name));
+  const r = reader108(f, read);
+  for (const [label, left] of [
+    ['P1', 27],
+    ['P2', 27],
+    ['Q', 21],
+  ] as const) {
+    const row = r.row(label);
+    expect.soft(row.found, `ROW-108 control: the page draws ${label}: ${r.quote(row)}`).toBe(true);
+    expect.soft(r.says(row, left), `ROW-108 control: ${label}'s row draws its year's days left ${left}: ${r.quote(row)}`).toBe(true);
+  }
+});
+
+test('ROW-108.REQ-022.page-draws-the-forecast-each-approval-leaves-in-its-year', async ({ browser }) => {
+  const f = await twoYears();
+  const before = await readPendingPage(browser, f.admin, specs108(f.rhea.m.name));
+  const b = reader108(f, before);
+  const [p1, p2, q] = ['P1', 'P2', 'Q'].map((l) => b.row(l));
+  expect(p1.found && p2.found && q.found, `ROW-108: the page draws P1, P2 and Q; page: "${before.body.slice(0, 500)}"`).toBe(true);
+  expect.soft(b.says(p1, 23), `ROW-108: P1's row draws the forecast 27 − 4 = 23: ${b.quote(p1)}`).toBe(true);
+  expect.soft(b.says(p1, 18), `ROW-108: P1's row does not draw 27 − 9 = 18 (every pending day taken off): ${b.quote(p1)}`).toBe(false);
+  expect.soft(b.says(p2, 22), `ROW-108: P2's row draws the forecast 27 − 5 = 22: ${b.quote(p2)}`).toBe(true);
+  expect.soft(b.says(p2, 18), `ROW-108: P2's row does not draw 27 − 9 = 18: ${b.quote(p2)}`).toBe(false);
+  expect.soft(b.says(q, 19), `ROW-108: Q's row draws next year's forecast 21 − 2 = 19: ${b.quote(q)}`).toBe(true);
+  expect.soft(b.says(q, 25), `ROW-108: Q's row does not draw this year's 27 − 2 = 25: ${b.quote(q)}`).toBe(false);
+
+  await approve(f.admin, f.p1);
+  const left2027 = daysLeftIn(await readBalance(f.rhea.actor), 2027);
+  expect.soft(left2027, "ROW-108: after approving P1 alone, Rhea's 2027 days left is 23").toBe(23);
+  expect.soft(left2027 !== undefined && b.says(p1, left2027), `ROW-108: the days left after approving P1 (${left2027}) is the figure P1's row drew: ${b.quote(p1)}`).toBe(true);
+
+  const after = await readPendingPage(browser, f.admin, specs108(f.rhea.m.name), { mustFind: ['P2', 'Q'] });
+  const a = reader108(f, after);
+  expect.soft(a.row('P1').found, `ROW-108: after its approval the page no longer draws P1: ${a.quote(a.row('P1'))}`).toBe(false);
+  const p2After = a.row('P2');
+  const qAfter = a.row('Q');
+  expect.soft(a.says(p2After, 18), `ROW-108: P2's row now draws 23 − 5 = 18: ${a.quote(p2After)}`).toBe(true);
+  expect.soft(a.says(p2After, 22), `ROW-108: P2's row no longer draws its first forecast 22: ${a.quote(p2After)}`).toBe(false);
+  expect.soft(a.says(qAfter, 19), `ROW-108: Q's row still draws 19 (P1 was in 2027): ${a.quote(qAfter)}`).toBe(true);
+
+  await approve(f.admin, f.q);
+  const left2028 = daysLeftIn(await readBalance(f.rhea.actor), 2028);
+  expect.soft(left2028, "ROW-108: after approving Q, Rhea's 2028 days left is 19").toBe(19);
+  expect.soft(left2028 !== undefined && a.says(qAfter, left2028), `ROW-108: the days left after approving Q (${left2028}) is the figure Q's row drew: ${a.quote(qAfter)}`).toBe(true);
 });
