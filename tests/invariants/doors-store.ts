@@ -17,6 +17,7 @@
 //     list the steps; this module's reading is `at` = "<action>:after-first-write" — the next <action> fails after its
 //     first record write and before it completes (before its write transaction commits) — with <action> one of
 //     FAULT_ACTIONS. A product whose door names its steps otherwise answers non-2xx, a SETUP failure naming the step.
+import { createHash } from 'node:crypto';
 import { anonymousApi, requireOk, SetupError } from './harness';
 
 // ---------------------------------------------------------------------------------------------------
@@ -306,4 +307,63 @@ export async function armFault(action: FaultAction): Promise<string> {
     await api.dispose();
   }
   return at;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Session rows (added by the test-author pass, slice 1, brief test-author-21, for HOS-008 and HOS-009)
+// ---------------------------------------------------------------------------------------------------
+//
+// D-003: sessions are server-side rows (ARCHITECTURE.md names the accounts module's `sessions` table); D-032: the
+// server stores only the SHA-256 of the session identifier the cookie carries. These readings find a session's row
+// by that hash, and an account's session rows by the column of `sessions` that refers to `accounts`.
+
+/**
+ * The column of `sessions` that names the account a session belongs to: the column a foreign key of `sessions` points
+ * from into `accounts`; failing a declared one, the single column whose name says account, user, person, member or
+ * owner. Throws a SetupError when neither reading finds exactly one.
+ */
+export async function sessionAccountColumn(): Promise<string> {
+  const columns = await tableColumns('sessions');
+  const fks = (await storeRead(`PRAGMA foreign_key_list(${ident('sessions')})`))
+    .filter((r) => String(r.table).toLowerCase() === 'accounts')
+    .map((r) => String(r.from));
+  const declared = [...new Set(fks)];
+  if (declared.length === 1) return declared[0];
+  const named = columns.map((c) => c.name).filter((n) => /account|user|person|member|owner/i.test(n));
+  if (declared.length === 0 && named.length === 1) return named[0];
+  throw new SetupError(
+    `the sessions table's account column could not be read: foreign keys into accounts from ${JSON.stringify(declared)}, account-named columns ${JSON.stringify(named)}`,
+  );
+}
+
+/** Every stored session row of the account whose stored key is `accountKey` (compared as text). */
+export async function sessionRowsOfAccount(accountKey: Cell): Promise<Row[]> {
+  const col = await sessionAccountColumn();
+  return (await tableRows('sessions')).filter((r) => sameCell(r[col], accountKey));
+}
+
+/** The text forms the SHA-256 of a session identifier can be stored in: hex (either case), base64, base64url. */
+export function identifierHashForms(identifier: string): string[] {
+  const forms = new Set<string>();
+  const values = new Set([identifier]);
+  try {
+    values.add(decodeURIComponent(identifier));
+  } catch {
+    /* not URI-encoded */
+  }
+  for (const v of values) {
+    const h = createHash('sha256').update(v).digest();
+    forms.add(h.toString('hex'));
+    forms.add(h.toString('hex').toUpperCase());
+    forms.add(h.toString('base64'));
+    forms.add(h.toString('base64').replace(/=+$/, ''));
+    forms.add(h.toString('base64url'));
+  }
+  return [...forms];
+}
+
+/** The stored session rows holding, in any column, the SHA-256 of `identifier` (a session cookie's value, D-032). */
+export async function sessionRowsHoldingHashOf(identifier: string): Promise<Row[]> {
+  const forms = identifierHashForms(identifier);
+  return (await tableRows('sessions')).filter((r) => Object.values(r).some((v) => cellTexts(v).some((t) => forms.includes(t))));
 }
