@@ -1,4 +1,4 @@
-// Purpose: how the pages show a day and a count (D-007): a YYYY-MM-DD day as "Mon 8 March 2027", read from its text
+// Purpose: how the pages show a day and a count (D-007, ROW-138): a YYYY-MM-DD day as "Mon 8 March 2027", read from its text
 // only and never turned into an instant, so every browser's zone shows the same day; a negative figure keeps its sign.
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -27,18 +27,25 @@ export function shownFigure(n: number): string {
   return n < 0 ? `-${Math.abs(n)}` : String(n)
 }
 
-/** An instant as its day and time in the team's time zone (D-007), never the browser's. */
+/**
+ * ROW-138 / REQ-006: an instant as "Tue 29 December 2026 at 15:00" — its day in the team's time zone (D-007), never
+ * the browser's or UTC, drawn by shownDay so every date the product shows has the one shape, then the team-zone time.
+ */
 export function shownInstant(iso: string, timeZone: string | undefined): string {
   try {
-    return new Intl.DateTimeFormat('en-GB', {
+    const parts = new Intl.DateTimeFormat('en-GB', {
       timeZone,
-      day: 'numeric',
-      month: 'long',
       year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
       hourCycle: 'h23',
-    }).format(new Date(iso))
+    }).formatToParts(new Date(iso))
+    const part = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+    const day = `${part('year')}-${part('month')}-${part('day')}`
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return iso
+    return `${shownDay(day)} at ${part('hour')}:${part('minute')}`
   } catch {
     return iso
   }

@@ -131,8 +131,9 @@ const next = computed(() => (view.value ? shift(view.value.year, view.value.mont
 function linkTo(m: { year: number; month: number }) {
   return { path: '/calendar', query: { year: String(m.year), month: String(m.month) } }
 }
+// ROW-138: a day's label is drawn in the one date shape every page draws (app/utils/days.ts).
 function dayLabel(c: Cell): string {
-  return `${c.day} ${MONTHS[Number(c.date.slice(5, 7)) - 1]} ${c.date.slice(0, 4)}`
+  return shownDay(c.date)
 }
 </script>
 
