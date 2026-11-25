@@ -1,5 +1,5 @@
 // Purpose: ledger tests for ROW-181 (INV-002, REQ-015) — while people sign in, choose and change passwords, send vacation and sick requests and the admin rejects one with a note and sets a password, all through the pages, no address the browser loads or is sent to and no log line of the product carries a kind, the rejection note or a password.
-// Provenance: hand-authored (test-author pass, slice 1, batch test-author-17); the install made by harness.ts (reset, team clock), everything else operated through the pages in the browser through the engine door (openPage, signInThroughPage) with the page readings of robustness.ts (the send form, the create form, the reject step), fresh per run; the product's log lines read through the log door of D-048 (doors-store.ts).
+// Provenance: hand-authored (test-author pass, slice 1, batch test-author-17; the reject step repaired in batch test-author-20 to pick the sick request's row by its own days, never by position); the install made by harness.ts (reset, team clock), everything else operated through the pages in the browser through the engine door (openPage, signInThroughPage) with the page readings of robustness.ts (the send form, the create form, the sign-in form), fresh per run; the product's log lines read through the log door of D-048 (doors-store.ts).
 //
 // Row table:
 //   ROW-181 | urls and logs | n/a | every URL two browsers load, request or are redirected to on /sign-in, /password, /requests/new, /, /calendar, /admin/people, /admin/pending, /admin/people/:id; GET /api/__test/logs
@@ -11,6 +11,11 @@
 //   - The admin sets a password from the people page (D-046): the row holding the person's display name carries a
 //     button whose name holds "password"; it opens a dialog (role dialog) whose password fields all take the new
 //     password, sent by the dialog's button named Set… / Save… / Confirm… / Change….
+//   - The admin rejects the sick request from the pending page (REQ-008): the row holding the person's display name,
+//     its days' month (April 2027: "2027-04-", "April" or "Apr") and a button named Reject…, and NOT the vacation's
+//     month (May) — the pending page lists oldest sent first (REQ-008 fail-if 2), so a position never names a request;
+//     its Reject button opens a step with a field labelled Note, confirmed by the step's own button named Confirm… /
+//     Yes… / Reject… (inside the dialog when one shows, else inside the row when it holds the note, else inside the note's form).
 // A reading the product does not match throws a SetupError naming it; every operated step is checked to have taken
 // effect (read back through the API), so the scan is never run over a flow that did not happen.
 //
@@ -54,8 +59,8 @@ import {
   type Opened,
 } from './harness';
 import { readOwnRequests, readPersonRequests } from './request-records';
-import { loadSettled, pollUntil } from './page-rows';
-import { createForm, fillCreateForm, fillSendForm, openSendForm, rejectThroughPage, settle, submitSignIn } from './robustness';
+import { loadSettled, monthMarker, pollUntil, ROW_SELECTOR } from './page-rows';
+import { createForm, fillCreateForm, fillSendForm, openSendForm, settle, submitSignIn } from './robustness';
 import { logLinesSince, logMark } from './doors-store';
 
 const NOW = '2027-03-09T20:00:00Z'; // Wed 2027-03-10 09:00 Pacific/Auckland
@@ -137,6 +142,43 @@ async function setPasswordThroughPage(page: Page, personName: string, password: 
   await settle(page);
 }
 
+/**
+ * On /admin/pending, rejects with `note` the one request of `personName` whose days fall in `day`'s month, per the
+ * reading in the header: the row is picked by its own days (a row also carrying `otherDay`'s month is not it), never
+ * by its position in the list.
+ */
+async function rejectRequestThroughPage(page: Page, personName: string, day: string, otherDay: string, note: string): Promise<void> {
+  const reject = /^reject/i;
+  const row = page
+    .locator(ROW_SELECTOR)
+    .filter({ hasText: personName })
+    .filter({ hasText: monthMarker(day) })
+    .filter({ hasNotText: monthMarker(otherDay) })
+    .filter({ has: page.getByRole('button', { name: reject }) })
+    .last();
+  try {
+    await row.waitFor({ state: 'visible', timeout: 15_000 });
+  } catch {
+    throw new SetupError(`no row on /admin/pending holds "${personName}", the month of ${day} (and not of ${otherDay}) and a Reject button`);
+  }
+  page.once('dialog', (d) => d.accept().catch(() => undefined));
+  await row.getByRole('button', { name: reject }).first().click();
+  const noteField = page.getByLabel(/note/i).first();
+  try {
+    await noteField.waitFor({ state: 'visible', timeout: 10_000 });
+  } catch {
+    throw new SetupError('the reject step shows no field labelled "Note"');
+  }
+  await noteField.fill(note);
+  const dialog = page.getByRole('dialog').or(page.getByRole('alertdialog')).last();
+  const noteForm = noteField.locator('xpath=ancestor::form[1]');
+  const inRow = (await row.getByLabel(/note/i).count()) > 0;
+  const scope: Locator = (await dialog.isVisible().catch(() => false)) ? dialog : inRow ? row : (await noteForm.count()) > 0 ? noteForm : row;
+  const confirm = scope.getByRole('button', { name: /^(confirm|yes|reject)\b/i });
+  if ((await confirm.count()) === 0) throw new SetupError('the reject step shows no button named Confirm, Yes or Reject');
+  await confirm.last().click();
+}
+
 interface Flow {
   install: Install;
   mark: number;
@@ -187,7 +229,7 @@ async function flow(browser: Browser): Promise<Flow> {
       await ms.dispose();
     }
     await loadSettled(a.page, PAGES.adminPending);
-    await rejectThroughPage(a.page, member.name, note);
+    await rejectRequestThroughPage(a.page, member.name, SICK.firstDay, VACATION.firstDay, note);
     await settle(a.page);
     await mustTakeEffect('the rejection with a note through the pending page', async () =>
       (await readPersonRequests(admin, memberId)).some((r) => r.firstDay === SICK.firstDay && r.state === 'rejected'),
