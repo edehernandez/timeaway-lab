@@ -31,6 +31,7 @@ interface PersonRequest {
   inEffectDays: number
   cancelledDays: number
   state: string
+  sentAt: string
   decidedAt: string | null
   decidedBy: string | null
   rejectionNote: string | null
@@ -175,6 +176,7 @@ function saveAllowance() {
           <th scope="col">Days</th>
           <th scope="col">Weekdays</th>
           <th scope="col">State</th>
+          <th scope="col">Sent</th>
           <th scope="col">Decided</th>
           <th scope="col">Cancelled</th>
           <th scope="col"><span class="visually-hidden">Actions</span></th>
@@ -188,6 +190,8 @@ function saveAllowance() {
             {{ shownCount(r.countedDays) }}<template v-if="r.cancelFrom">: {{ r.inEffectDays }} in effect, {{ r.cancelledDays }} cancelled</template>
           </td>
           <td>{{ shownWord(r.state) }}</td>
+          <!-- REQ-017, ROW-139: when it was sent, as its team-zone date and time. -->
+          <td>{{ shownInstant(r.sentAt, theirs.timeZone) }}</td>
           <td>
             <template v-if="r.decidedAt">by {{ r.decidedBy ?? 'unknown' }}, {{ shownInstant(r.decidedAt, theirs.timeZone) }}</template>
             <template v-if="r.rejectionNote"><br>Note: {{ r.rejectionNote }}</template>
