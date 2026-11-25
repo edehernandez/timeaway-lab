@@ -45,6 +45,7 @@ import {
   type Actor,
   type Credentials,
 } from './harness';
+import { runSetup, setupArgs } from './doors-process';
 
 const FLAGS = { isAdmin: true, admin: true, role: 'admin' };
 
@@ -164,5 +165,88 @@ test('ROW-187.control.setup-on-an-empty-database-creates-the-one-admin', async (
       .toBe(false);
   } finally {
     await admin?.dispose();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-186, the setup clause (added by test-author pass, slice 1, batch test-author-16, through the D-048 setup door in
+// ROW-186   doors-process.ts; the header's "is NOT in this case" note above predates this door).
+// ROW-186 promise: CON-001 "exactly one admin account, created when the product is set up" (A-013); D-011 "a one-time
+// ROW-186   setup command"; D-013 the zone "chosen once at setup … cannot be changed": the setup path refuses and
+// ROW-186   changes nothing once setup is done.
+// ROW-186 wrong product: a setup command that, run again on a set-up database, adds a second admin; or "re-sets" the
+// ROW-186   admin (an upsert by email that puts a new password or allowance on the installed admin, a recovery door the
+// ROW-186   owner never ruled); or re-writes the team zone; or exits 0 having done nothing (a refusal nobody is told of
+// ROW-186   is still a finish).
+// ROW-186 given: a fresh install in Auckland at 10:00 on 2 March 2027 (1 March in Los Angeles), a member with a
+// ROW-186   pending request. when: the setup command is run on that existing database (a) for a new admin with fresh
+// ROW-186   values and Los Angeles as its zone, (b) for the installed admin's own email with a new password and Los
+// ROW-186   Angeles. then: each ends with a non-zero exit; the people list, the pending list, the member's requests and
+// ROW-186   the team's today read exactly as before; the installed admin still signs in with its password and is the
+// ROW-186   one admin; neither the new admin nor the new password signs in.
+// ROW-186 controls: the same arguments for the new admin finish (exit 0) on a fresh database — the precondition,
+// ROW-186   SETUP when it fails — so each refusal is the existing database's and not a malformed call; before the runs
+// ROW-186   today is the Auckland date and the installed admin signs in.
+// ROW-186 technique: before and after around the forbidden act, the act in two forms (a second admin, a re-set of the
+// ROW-186   first) with fresh values that no product can hold already, and a census of every account the test made.
+// ROW-186 cases: ROW-186 target=ROW-186.CON-001.setup-on-an-existing-database-refuses-and-changes-nothing control=ROW-187.control.setup-on-an-empty-database-creates-the-one-admin
+test('ROW-186.CON-001.setup-on-an-existing-database-refuses-and-changes-nothing', async () => {
+  const LA = 'America/Los_Angeles';
+  const second = { name: freshName('Admin'), email: freshEmail('second'), password: freshPassword(), allowance: 30, timeZone: LA };
+  const pre = await runSetup(setupArgs(second), 'fresh');
+  if (pre.exit !== 0) {
+    throw new Error(`SETUP: the setup command did not finish on a fresh database with every argument (exit ${pre.exit}): ${pre.stderr.slice(0, 300)}`);
+  }
+
+  const install = await resetProduct({ timeZone: 'Pacific/Auckland', now: '2027-03-01T21:00:00Z' });
+  const admin = await signIn(install.admin);
+  const member = await createMember(admin);
+  const mActor = await signIn({ email: member.email, password: member.password });
+  try {
+    const sent = await mActor.api.post('/api/requests', { data: { kind: 'vacation', firstDay: '2027-03-15', lastDay: '2027-03-16' } });
+    expect(sent.status(), 'ROW-186 setup: the member\'s request is sent').toBe(201);
+    const json = async (a: Actor, route: string) => {
+      const res = await a.api.get(route);
+      return { status: res.status(), body: await res.json().catch(() => null) };
+    };
+    const read = async () => ({
+      people: await json(admin, '/api/admin/people'),
+      pending: await json(admin, '/api/admin/pending'),
+      requests: await json(mActor, '/api/requests'),
+      today: await json(admin, '/api/today'),
+      me: await json(admin, '/api/me'),
+    });
+    const before = await read();
+    expect(before.today, 'ROW-186 before: today is the Auckland date (2 March), not Los Angeles\' (1 March)').toEqual({ status: 200, body: { today: '2027-03-02' } });
+
+    const runs: [string, string[]][] = [
+      ['a second admin', setupArgs(second)],
+      [
+        'the installed admin\'s email with a new password',
+        setupArgs({ name: install.admin.name, email: install.admin.email, password: freshPassword(), allowance: 30, timeZone: LA }),
+      ],
+    ];
+    const reSetPassword = runs[1][1][runs[1][1].indexOf('--password') + 1];
+    for (const [label, args] of runs) {
+      const run = await runSetup(args, 'existing');
+      expect.soft(run.exit, `ROW-186 setup for ${label} on the existing database ends with an exit code`).not.toBeNull();
+      expect.soft(run.exit, `ROW-186 setup for ${label} on the existing database refuses (stdout: ${run.stdout.slice(0, 200)})`).not.toBe(0);
+    }
+
+    expect.soft(await read(), 'ROW-186 after: the people, the pending list, the member\'s requests, today and the admin read as before').toEqual(before);
+    expect.soft(await signsIn({ email: install.admin.email, password: install.admin.password }), 'ROW-186 after: the installed admin signs in with its password').toBe(true);
+    expect.soft(await signsIn({ email: install.admin.email, password: reSetPassword }), 'ROW-186 after: the re-set password does not sign in').toBe(false);
+    expect.soft(await signsIn({ email: second.email, password: second.password }), 'ROW-186 after: the second admin does not sign in').toBe(false);
+    const c = await census(
+      new Map<string, Credentials>([
+        ['the installed admin', { email: install.admin.email, password: install.admin.password }],
+        ['the member', { email: member.email, password: member.password }],
+        ['the second admin', { email: second.email, password: second.password }],
+      ]),
+    );
+    expect.soft(c.admins, 'ROW-186 after: exactly one admin, the installed one').toEqual(['the installed admin']);
+  } finally {
+    await mActor.dispose();
+    await admin.dispose();
   }
 });

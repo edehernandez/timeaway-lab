@@ -21,6 +21,8 @@ import {
   stateOf,
   teamInstant,
 } from './team-calendar';
+import { restartProduct } from './doors-process';
+import { LOS_ANGELES } from './team-calendar';
 
 test.afterEach(async () => {
   await disposeAll();
@@ -122,4 +124,69 @@ test('ROW-137.REQ-017.stored-days-and-calendar-survive-time-passing', async () =
     const again = await signInAgain(member);
     expect.soft(await snapshot(again, member), `ROW-137 ${label} (${day} ${time} Auckland): records and calendar are unchanged`).toEqual(before);
   }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-137, the process time zone half (added by test-author pass, slice 1, batch test-author-16, through the D-048
+// ROW-137   restart door in doors-process.ts; the header's "returned unwritable" note above predates this door).
+// ROW-137 promise: as above — REQ-017 (a request holds its first and last day as sent and the day its cancel takes
+// ROW-137   effect from), REQ-012 (the calendar lists the approved days), D-007 (days are calendar dates in the team's
+// ROW-137   zone): stored request days, cancel days and the calendar do not change when the server PROCESS time zone
+// ROW-137   changes.
+// ROW-137 wrong product: one that turns a YYYY-MM-DD day into a Date and back with the process's local zone — parsed
+// ROW-137   as UTC midnight and printed in local time (every day one earlier under Los Angeles), or built at local
+// ROW-137   midnight and printed as UTC (every day one earlier under Kiritimati, UTC+14) — on the read path, the
+// ROW-137   calendar's path or the write path of a new request.
+// ROW-137 given: the four requests of setUp (a partly cancelled one with cancel day 31 March 2027), read under the
+// ROW-137   image's own process zone. when: the server is restarted under America/Los_Angeles, a new vacation 3..5 May
+// ROW-137   is sent there; restarted under Pacific/Kiritimati, a new vacation 7..8 June is sent there; restarted under
+// ROW-137   the image's own zone again. then: after each restart the four records (days, cancel day, state) and the
+// ROW-137   calendar of February, March, April, September and December equal the first read; each new request carries
+// ROW-137   exactly its first and last day as sent, under every zone it is read in, and never the day before or after.
+// ROW-137 controls: ROW-137.control.the-snapshot-is-right-to-begin-with shows the first read is right; the restart
+// ROW-137   door's wait saw the server end and come back each time (so each read is a start under that zone).
+// ROW-137 technique: the same snapshot compared across process zones either side of UTC (west and the far east), the
+// ROW-137   write path exercised under each, the team clock put back to the same instant after each restart.
+// ROW-137 cases: ROW-137 target=ROW-137.REQ-017.stored-days-and-calendar-survive-a-process-time-zone-change control=ROW-137.control.the-snapshot-is-right-to-begin-with
+test('ROW-137.REQ-017.stored-days-and-calendar-survive-a-process-time-zone-change', async () => {
+  const { member, actor } = await setUp();
+  const before = await snapshot(actor, member);
+  expect(Object.keys(before.records).length, 'ROW-137 before: four records').toBe(4);
+  const sent: { id: string; first: string; last: string }[] = [];
+  const shifted = (ymd: string, n: number) => new Date(Date.parse(`${ymd}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+  const check = async (label: string) => {
+    const again = await signInAgain(member);
+    const now = await snapshot(again, member);
+    const fourNow = Object.fromEntries(Object.entries(now.records).filter(([id]) => !sent.some((w) => w.id === id)));
+    expect.soft(fourNow, `ROW-137 ${label}: the four records keep their days, cancel day and state`).toEqual(before.records);
+    expect.soft(now.calendar, `ROW-137 ${label}: the calendar is unchanged`).toEqual(before.calendar);
+    for (const w of sent) {
+      const days = now.records[w.id]?.days ?? [];
+      expect.soft(days, `ROW-137 ${label}: the request sent for ${w.first}..${w.last} carries its days as sent`).toEqual(
+        expect.arrayContaining([w.first, w.last]),
+      );
+      expect.soft(days, `ROW-137 ${label}: and not the day before ${w.first}`).not.toContain(shifted(w.first, -1));
+      expect.soft(days, `ROW-137 ${label}: and not the day after ${w.last}`).not.toContain(shifted(w.last, 1));
+    }
+    return again;
+  };
+
+  try {
+    await restartProduct({ timeZone: LOS_ANGELES });
+    await setTeamClock(AUCKLAND, '2027-03-31', '23:30');
+    const la = await check('under America/Los_Angeles');
+    sent.push({ id: String(await sendOk(la, { kind: 'vacation', firstDay: '2027-05-03', lastDay: '2027-05-05' })), first: '2027-05-03', last: '2027-05-05' });
+    await check('under America/Los_Angeles, after a send there');
+
+    await restartProduct({ timeZone: 'Pacific/Kiritimati' });
+    await setTeamClock(AUCKLAND, '2027-03-31', '23:30');
+    const kiri = await check('under Pacific/Kiritimati');
+    sent.push({ id: String(await sendOk(kiri, { kind: 'vacation', firstDay: '2027-06-07', lastDay: '2027-06-08' })), first: '2027-06-07', last: '2027-06-08' });
+    await check('under Pacific/Kiritimati, after a send there');
+  } finally {
+    await restartProduct();
+  }
+  await setTeamClock(AUCKLAND, '2027-03-31', '23:30');
+  await check('back under the image\'s own zone');
 });
