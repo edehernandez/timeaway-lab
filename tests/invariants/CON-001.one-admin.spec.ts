@@ -41,11 +41,14 @@ import {
   actWithToken,
   resetProduct,
   signIn,
+  SetupError,
   type AccountSpec,
   type Actor,
   type Credentials,
 } from './harness';
-import { runSetup, setupArgs } from './doors-process';
+import { restartProduct, runSetup, setupArgs } from './doors-process';
+import { ident, storeRead, storeRun, tableColumns } from './doors-store';
+import { holdsValue, recordByEmail, topRecords } from './records';
 
 const FLAGS = { isAdmin: true, admin: true, role: 'admin' };
 
@@ -248,5 +251,98 @@ test('ROW-186.CON-001.setup-on-an-existing-database-refuses-and-changes-nothing'
   } finally {
     await mActor.dispose();
     await admin.dispose();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-187, the setup command itself, served (added by test-author pass, slice 1, brief test-author-22, through the
+// ROW-187   D-048 setup and restart doors in doors-process.ts and the store door in doors-store.ts).
+// ROW-187 promise: control of ROW-186 — CON-001 "There is exactly one admin account, created when the product is set
+// ROW-187   up" (A-013); D-011 "The one admin account … created by a one-time setup command run on the machine, before
+// ROW-187   anyone signs in"; D-050 the command takes --name --email --password --allowance --time-zone.
+// ROW-187 wrong product: a setup command that writes the account with the admin marker false (or none), or marks it to
+// ROW-187   change its password at first sign-in, or writes a second account, or exits 0 having written nothing the
+// ROW-187   server then reads; the test reset door creating the admin correctly hides all of these, since the
+// ROW-187   earlier ROW-187 case never runs the command.
+// ROW-187 given: a fresh install (the reset door) whose admin signs in, and setup values no install has used (fresh
+// ROW-187   name, email and password, allowance 31). when: the product's own database is emptied of every row of the
+// ROW-187   accounts and requests modules' tables (ARCHITECTURE.md: accounts, account_allowances, sessions,
+// ROW-187   account_events, settings, requests; the migration history kept), the setup command is run on it through
+// ROW-187   the setup door (database "existing"), and the product is restarted on it (the restart door), so the
+// ROW-187   server serves exactly what the command wrote. then: the command exits 0; the setup credentials sign in;
+// ROW-187   GET /api/me answers isAdmin true, the setup name and mustChangePassword false; GET /api/admin/people
+// ROW-187   answers 200 with exactly one account, which holds the setup email and the allowance 31; the store's
+// ROW-187   accounts table holds exactly one row; the previous install's admin does not sign in.
+// ROW-187 controls: before, the previous admin signs in and the setup credentials do not; after the emptying and
+// ROW-187   before the command, the six tables hold no row and the previous admin no longer signs in — so every
+// ROW-187   "after" fact is the command's doing; the same arguments finish (exit 0) on the door's fresh database.
+// ROW-187 technique: before and after around the one real setup run, fresh values no product can hold already, the
+// ROW-187   result read where the served product exposes it (sign-in, /api/me, the people answer) and counted in the
+// ROW-187   store (a denominator of accounts, never "the admin is somewhere").
+// ROW-187 cases: ROW-187 target=ROW-187.control.the-setup-command-on-an-empty-database-serves-the-one-admin control=ROW-186.CON-001.setup-on-an-existing-database-refuses-and-changes-nothing
+
+/** The tables of the accounts and requests modules (ARCHITECTURE.md's owned tables), emptied child tables first. */
+const OWNED_TABLES = ['sessions', 'requests', 'account_events', 'account_allowances', 'settings', 'accounts'];
+
+/** Rows a table holds now, through the store door. */
+async function rowCount(table: string): Promise<number> {
+  const rows = await storeRead(`SELECT COUNT(*) AS n FROM ${ident(table)}`);
+  return Number(rows[0]?.n ?? NaN);
+}
+
+/** Empties the owned tables through the store door; a table the store keeps refusing is a SETUP failure naming it. */
+async function emptyOwnedTables(): Promise<void> {
+  for (const t of OWNED_TABLES) await tableColumns(t); // each exists (SETUP otherwise)
+  const refused = new Map<string, string>();
+  for (let pass = 0; pass < OWNED_TABLES.length; pass += 1) {
+    refused.clear();
+    for (const t of OWNED_TABLES) {
+      if ((await rowCount(t)) === 0) continue;
+      const a = await storeRun(`DELETE FROM ${ident(t)}`);
+      if (a.error !== null) refused.set(t, a.error);
+    }
+    if (refused.size === 0) return;
+  }
+  throw new SetupError(`the store door could not empty ${JSON.stringify([...refused])}`);
+}
+
+test('ROW-187.control.the-setup-command-on-an-empty-database-serves-the-one-admin', async () => {
+  const previous = await resetProduct();
+  const spec = { name: freshName('Admin'), email: freshEmail('setup'), password: freshPassword(), allowance: 31, timeZone: 'Pacific/Auckland' };
+
+  const onFresh = await runSetup(setupArgs(spec), 'fresh');
+  expect.soft(onFresh.exit, `ROW-187 control: the setup command finishes on the door's fresh database (stderr: ${onFresh.stderr.slice(0, 200)})`).toBe(0);
+
+  expect(await signsIn({ email: previous.admin.email, password: previous.admin.password }), 'ROW-187 before: the previous admin signs in').toBe(true);
+  expect(await signsIn({ email: spec.email, password: spec.password }), 'ROW-187 before: the setup credentials do not sign in').toBe(false);
+
+  await emptyOwnedTables();
+  for (const t of OWNED_TABLES) expect(await rowCount(t), `ROW-187 control: after the emptying, ${t} holds no row`).toBe(0);
+  expect(await signsIn({ email: previous.admin.email, password: previous.admin.password }), 'ROW-187 control: after the emptying, the previous admin no longer signs in').toBe(false);
+
+  const run = await runSetup(setupArgs(spec), 'existing');
+  expect(run.exit, `ROW-187: the setup command finishes on the empty database (stdout: ${run.stdout.slice(0, 200)}; stderr: ${run.stderr.slice(0, 200)})`).toBe(0);
+  await restartProduct();
+
+  const admin = await trySignIn({ email: spec.email, password: spec.password });
+  expect(admin, 'ROW-187 after: the served product signs the setup admin in with the given password').not.toBeNull();
+  try {
+    expect.soft(admin!.me.isAdmin, 'ROW-187 after: GET /api/me answers isAdmin true for the setup account').toBe(true);
+    expect.soft(admin!.me.name, 'ROW-187 after: with the name given to the setup command').toBe(spec.name);
+    expect.soft(admin!.me.mustChangePassword, 'ROW-187 after: the setup admin is not forced to change the password it was given').toBe(false);
+    const res = await admin!.api.get('/api/admin/people');
+    expect.soft(res.status(), 'ROW-187 after: the setup admin reaches the people route').toBe(200);
+    const people = res.ok() ? ((await res.json().catch(() => null)) as unknown) : null;
+    const listed = topRecords(people).filter((r) => Object.keys(r).some((k) => /^(id|accountId|account_id)$/.test(k)));
+    expect.soft(listed.length, `ROW-187 after: the people answer lists exactly one account (${JSON.stringify(people)?.slice(0, 300)})`).toBe(1);
+    const own = recordByEmail(people, spec.email);
+    expect.soft(own, 'ROW-187 after: that account holds the setup email').toBeDefined();
+    expect.soft(holdsValue(own, 31), 'ROW-187 after: and the allowance given to the setup command (31)').toBe(true);
+    expect.soft(await rowCount('accounts'), 'ROW-187 after: the store holds exactly one account').toBe(1);
+    expect
+      .soft(await signsIn({ email: previous.admin.email, password: previous.admin.password }), 'ROW-187 after: the previous install\'s admin does not sign in')
+      .toBe(false);
+  } finally {
+    await admin?.dispose();
   }
 });
