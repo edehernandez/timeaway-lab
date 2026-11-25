@@ -51,9 +51,11 @@ const route = useRoute()
 const me = useMe()
 const id = computed(() => String(route.params.id))
 const { data: people, refresh: refreshPeople } = await useFetch<Person[]>('/api/admin/people', { default: () => [] })
-const { data: history, refresh: refreshHistory } = await useFetch<{ history: Change[] }>(() => `/api/admin/people/${id.value}/history`, {
-  default: () => ({ history: [] }),
-})
+// ROW-138 / REQ-006: each change's instant is shown on the team's day and in the one date format (app/utils/days.ts).
+const { data: history, refresh: refreshHistory } = await useFetch<{ timeZone: string; history: Change[] }>(
+  () => `/api/admin/people/${id.value}/history`,
+  { default: () => ({ timeZone: 'UTC', history: [] }) },
+)
 // REQ-021: the person's requests as their own page lists them, each saying whether the admin's cancel applies now.
 const { data: theirs, refresh: refreshTheirs } = await useFetch<{ timeZone: string; requests: PersonRequest[] }>(
   () => `/api/admin/people/${id.value}/requests`,
@@ -272,7 +274,7 @@ function saveAllowance() {
     <h2>Changes</h2>
     <ul v-if="history.history.length">
       <li v-for="(c, i) in history.history" :key="i">
-        {{ c.at.slice(0, 16).replace('T', ' ') }} UTC — {{ c.what }}<template v-if="c.to !== null"> ({{ c.from !== null ? `${c.from} → ` : '' }}{{ c.to }})</template><template v-if="c.startsYear"> from {{ c.startsYear }}</template><template v-if="c.by"> by {{ c.by }}</template>
+        {{ shownInstant(c.at, history.timeZone) }} — {{ c.what }}<template v-if="c.to !== null"> ({{ c.from !== null ? `${c.from} → ` : '' }}{{ c.to }})</template><template v-if="c.startsYear"> from {{ c.startsYear }}</template><template v-if="c.by"> by {{ c.by }}</template>
       </li>
     </ul>
     <p v-else>No changes yet.</p>
