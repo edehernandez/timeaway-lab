@@ -95,7 +95,7 @@ async function cancel(id: number) {
   <section>
     <h1>My requests</h1>
     <!-- ROW-210: the link is one box, never split over two lines, so it is tapped where it is drawn. -->
-    <p>Welcome, {{ me?.name }}. <NuxtLink to="/requests/new" class="ask">Ask for time off</NuxtLink></p>
+    <p>Welcome, {{ me?.name }}. <NuxtLink to="/requests/new" class="ask">Send a request</NuxtLink></p>
     <h2>Vacation days</h2>
     <table v-if="balance?.years?.length" class="balance">
       <thead>
