@@ -1,5 +1,5 @@
 // Purpose: shared setup for the REQ-002 hostility probes (HOS-001 to HOS-005) — a team whose vacation is already spent in each year through the public routes, a press of the send form read as the answer it drew, two send forms pressed at the same moment, a person's stored requests matched by their days, and a person's part of the people page.
-// Provenance: hand-authored (test-author pass, slice 1, brief test-author-14), from DECISIONS.md D-029 (routes, pages, forms in plain words) and D-037 (an allowance refusal names the year's days left and pending days as numbers); a public harness boundary beside harness.ts, request-rules.ts, robustness.ts, page-figures.ts and records.ts.
+// Provenance: hand-authored (test-author pass, slice 1, brief test-author-14; brief test-author-18 added spentTeam's noSendFillsAYear option, sendThroughFormWatched and pressAtOnce), from DECISIONS.md D-029 (routes, pages, forms in plain words) and D-037 (an allowance refusal names the year's days left and pending days as numbers); a public harness boundary beside harness.ts, request-rules.ts, robustness.ts, page-figures.ts and records.ts.
 //
 // This module asserts nothing about any row. It reaches the product only through harness.ts and the modules named
 // above — over HTTP or through the engine door at VID_PRODUCT_URL — and reads no application code. Every record it
@@ -15,8 +15,8 @@
 //   - a person's STORED request for an ask is a GET /api/requests item whose firstDay and lastDay equal the ask's;
 //   - a person's PART of the people page is records.ts textAbout: the largest element holding the person's email and
 //     no other account's email, its text with the person's name and email removed (they carry run-id digits).
-import { expect, type Browser, type Page } from '@playwright/test';
-import { openPage, PAGES, type Actor, type Member } from './harness';
+import { expect, type Browser, type Page, type Request, type Route } from '@playwright/test';
+import { openPage, PAGES, SetupError, setAllowance, type Actor, type Member } from './harness';
 import { fillSendForm, newLines, openSendForm, sendButton, settle, textLines } from './robustness';
 import {
   addDays,
@@ -123,14 +123,25 @@ export interface SpentTeam {
   dispose(): Promise<void>;
 }
 
-/** A fresh install at `cal.now` with P and Q spent as `f` says, every request through the public routes. */
-export async function spentTeam(cal: ProbeCalendar, f: SpentFigures): Promise<SpentTeam> {
-  const team = await setupTeam({ now: cal.now, allowances: [f.A, f.A] });
+/**
+ * A fresh install at `cal.now` with P and Q spent as `f` says, every request through the public routes.
+ *
+ * With `noSendFillsAYear: true` (HOS-002, added by brief test-author-18) no setup send asks for exactly the room its
+ * year has left, so a balance check that refuses at equality cannot break the setup — only the probe's own send meets
+ * equality. Q is created with allowance A + 1, spends this year c approved and A − c pending (one day of room left)
+ * and next year b approved and q pending, and then the admin sets Q's allowance to A starting this year (REQ-011
+ * AMENDED: a change starting this year applies at once to this year and every later year no next-year change has
+ * set), which uses this year up and leaves next year's room k2. The figures `f` describes are the same either way.
+ */
+export async function spentTeam(cal: ProbeCalendar, f: SpentFigures, opts: { noSendFillsAYear?: boolean } = {}): Promise<SpentTeam> {
+  const lower = opts.noSendFillsAYear === true;
+  const team = await setupTeam({ now: cal.now, allowances: [f.A, lower ? f.A + 1 : f.A] });
   const [p, q] = team.people;
   try {
     await spendVacation(team.admin, p, cal.thisYearSpend, f.a, f.p);
     await spendVacation(team.admin, q, cal.thisYearSpend, f.c, f.A - f.c);
     await spendVacation(team.admin, q, cal.nextYearSpend, f.b, f.q);
+    if (lower) await setAllowance(team.admin, team.members[1].id, f.A, { startsNextYear: false });
   } catch (e) {
     await team.dispose();
     throw e;
@@ -198,6 +209,99 @@ export async function pressTogether(pages: Page[], asks: Ask[]): Promise<Pressed
   for (let i = 0; i < pages.length; i += 1) readied.push(await ready(pages[i], asks[i]));
   await Promise.all(readied.map((r) => r.press()));
   return Promise.all(readied.map((r) => answerOf(r)));
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The send form, pressed with its request watched at the browser's network layer (HOS-005, brief test-author-18)
+// ---------------------------------------------------------------------------------------------------
+
+/** What one press drew, and the request it sent as the browser saw it. */
+export interface Watched extends Pressed {
+  /** True when the press sent a request (any method but GET) whose body carries the ask's first day. */
+  sent: boolean;
+  /** The status the product answered that request with; 0 when nothing was sent or no answer came. */
+  status: number;
+}
+
+/** True when `req` is the send of `ask`: not a GET, and its body (JSON, form-encoded or multipart) holds the ask's first day. */
+function carriesAsk(req: Request, ask: Ask): boolean {
+  if (req.method() === 'GET') return false;
+  return (req.postData() ?? '').includes(ask.firstDay);
+}
+
+/** A bounded wait that can be cancelled, so no timer outlives the press it bounds. */
+function within(ms: number): { done: Promise<void>; cancel(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const done = new Promise<void>((resolve) => (timer = setTimeout(resolve, ms)));
+  return { done, cancel: () => clearTimeout(timer) };
+}
+
+/** The status the product answered `req` with (bounded); 0 when no answer came. */
+async function statusOf(req: Request | null, timeoutMs = 15_000): Promise<number> {
+  if (req === null) return 0;
+  const bound = within(timeoutMs);
+  try {
+    const res = await Promise.race([req.response().catch(() => null), bound.done.then(() => null)]);
+    return res?.status() ?? 0;
+  } finally {
+    bound.cancel();
+  }
+}
+
+/** Like sendThroughForm, and also reports whether the press sent the ask's request and what the product answered. */
+export async function sendThroughFormWatched(page: Page, ask: Ask, timeoutMs = 10_000): Promise<Watched> {
+  const r = await ready(page, ask);
+  const sent = page.waitForRequest((q) => carriesAsk(q, ask), { timeout: timeoutMs }).catch(() => null);
+  await r.press();
+  const req = await sent;
+  const status = await statusOf(req);
+  return { ...(await answerOf(r)), sent: req !== null, status };
+}
+
+/**
+ * Two (or more) sends that leave the browser at the same moment, whatever the clicks' own timing. Fills one send form
+ * per page (page i with ask i), every form filled before any is pressed; on each page the request carrying that
+ * page's ask is held at the browser's network layer (page.route) until every page's request is held, then all are
+ * released together — so every send has left its page before the product has answered any of them. Then presses
+ * every Send button (one Promise.all of the clicks), waits for each answer and reads what each press drew.
+ * When a page's press sends no request carrying its ask within `timeoutMs`, the held ones are released and a
+ * SetupError names the page: the simultaneous case was not reached, which is setup, never the row failing.
+ */
+export async function pressAtOnce(pages: Page[], asks: Ask[], timeoutMs = 10_000): Promise<Watched[]> {
+  if (pages.length !== asks.length) throw new Error('pressAtOnce needs one ask per page');
+  const readied: Ready[] = [];
+  for (let i = 0; i < pages.length; i += 1) readied.push(await ready(pages[i], asks[i]));
+  const held: (Request | null)[] = pages.map(() => null);
+  let releaseAll!: () => void;
+  const allHeld = new Promise<void>((resolve) => (releaseAll = resolve));
+  const bound = within(timeoutMs);
+  const gate = Promise.race([allHeld, bound.done]);
+  const handlers = pages.map((_, i) => async (route: Route) => {
+    const req = route.request();
+    if (held[i] === null && carriesAsk(req, asks[i])) {
+      held[i] = req;
+      if (held.every((h) => h !== null)) releaseAll();
+      await gate;
+    }
+    await route.continue().catch(() => undefined);
+  });
+  for (let i = 0; i < pages.length; i += 1) await pages[i].route('**/*', handlers[i]);
+  try {
+    const clicks = Promise.all(readied.map((r) => r.press()));
+    const together = await Promise.race([allHeld.then(() => true), bound.done.then(() => false)]);
+    await clicks;
+    if (!together) {
+      const silent = held.map((h, i) => (h === null ? i + 1 : 0)).filter((n) => n > 0);
+      throw new SetupError(`pressAtOnce: the press on page ${silent.join(', ')} sent no request carrying its ask within ${timeoutMs} ms, so the sends were not simultaneous`);
+    }
+    const statuses = await Promise.all(held.map((h) => statusOf(h)));
+    const drawn = await Promise.all(readied.map((r) => answerOf(r)));
+    return drawn.map((d, i) => ({ ...d, sent: true, status: statuses[i] }));
+  } finally {
+    bound.cancel();
+    releaseAll();
+    for (let i = 0; i < pages.length; i += 1) await pages[i].unroute('**/*', handlers[i]).catch(() => undefined);
+  }
 }
 
 /** Opens `n` pages through the engine door, each signed in as `actor`; close them with closeAll. */

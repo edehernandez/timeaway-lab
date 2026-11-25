@@ -1,5 +1,5 @@
 // Purpose: hostility probe HOS-002 (protects REQ-002) — through the send form, a vacation of exactly the year's days left minus its pending days is accepted and stored pending, this year and, with this year used up, next year.
-// Provenance: hand-authored (test-author pass, slice 1, brief test-author-14); fixture data made through the product's public routes by harness.ts, request-rules.ts and balance-probes.ts (reset, accounts, requests, approval), fresh per run; the send form operated through harness.ts's engine door.
+// Provenance: hand-authored (test-author pass, slice 1, brief test-author-14; fixture repaired by brief test-author-18 so no setup send fills a year's room exactly); fixture data made through the product's public routes by harness.ts, request-rules.ts and balance-probes.ts (reset, accounts, requests, approval), fresh per run; the send form operated through harness.ts's engine door.
 //
 // Boundary: the probe row names its surface — "through the send-request form" — so the ask is made by pressing Send
 // on /requests/new in the browser; what was stored is read back over HTTP on the person's own GET /api/requests and
@@ -20,10 +20,15 @@ const Y = CAL.Y;
 // HOS-002   that subtracts pending twice, or counts this year's used-up figures against a next-year request.
 // HOS-002 given: P with allowance A (fresh), this year a approved and p pending, room k = A − a − p ≥ 2; Q with
 // HOS-002   allowance A, this year used up (c approved, A − c pending), next year b approved and q pending, room k2 ≥ 2.
+// HOS-002   No setup send asks for exactly its year's room (spentTeam's noSendFillsAYear): Q is made with A + 1, spends
+// HOS-002   both years leaving a day of room, and the admin then sets Q's allowance to A starting this year (REQ-011
+// HOS-002   AMENDED: this year and every later year) — so the row's toggle, refusing at equality, can change only the
+// HOS-002   probe's own send, never the fixture.
 // HOS-002 when: P presses Send on the form for exactly k vacation weekdays this year; Q for exactly k2 next year.
 // HOS-002 then: each is stored once, a pending vacation with the asked days; P's year reads {L, p + k}; Q's next year
 // HOS-002   reads {L2, q + k2} and Q's this year is unchanged {A − c, A − c}.
-// HOS-002 controls: the control case shows the fixture lands and that the same form's press for k − 1 (P) and
+// HOS-002 controls: the control case shows the fixture lands (Q's lowered allowance included: this year reads
+// HOS-002   {A − c, A − c}, next year {L2, q}) and that the same form's press for k − 1 (P) and
 // HOS-002   k2 − 1 (Q) days is stored — a send below the room, untouched by a check that refuses only at equality, so
 // HOS-002   the form, the session and the store read work and the target measures the boundary alone.
 // HOS-002 technique: the threshold exactly (k + 1 refused is HOS-001's), one day under as the control; the figures
@@ -31,7 +36,7 @@ const Y = CAL.Y;
 // HOS-002 cases: HOS-002 target=HOS-002.REQ-002.exactly-the-years-room-is-accepted-pending-through-the-form control=HOS-002.control.the-fixture-lands-and-one-day-under-the-room-is-stored
 test('HOS-002.control.the-fixture-lands-and-one-day-under-the-room-is-stored', async ({ browser }) => {
   const f = spentFigures();
-  const t = await spentTeam(CAL, f);
+  const t = await spentTeam(CAL, f, { noSendFillsAYear: true });
   try {
     expect.soft(await yearBalance(t.p, Y), 'HOS-002 control: P this year').toEqual({ daysLeft: f.L, pending: f.p });
     expect.soft(await yearBalance(t.q, Y), 'HOS-002 control: Q this year is used up').toEqual({ daysLeft: f.A - f.c, pending: f.A - f.c });
@@ -56,7 +61,7 @@ test('HOS-002.control.the-fixture-lands-and-one-day-under-the-room-is-stored', a
 
 test('HOS-002.REQ-002.exactly-the-years-room-is-accepted-pending-through-the-form', async ({ browser }) => {
   const f = spentFigures();
-  const t = await spentTeam(CAL, f);
+  const t = await spentTeam(CAL, f, { noSendFillsAYear: true });
   try {
     const cases: [typeof t.p, Ask, string, number, { daysLeft: number; pending: number }, { daysLeft: number; pending: number }][] = [
       [t.p, { kind: 'vacation', ...weekdaySpan(CAL.thisYearAsk, f.k) }, `P's exactly ${f.k} days this year`, Y, { daysLeft: f.L, pending: f.p + f.k }, { daysLeft: f.A, pending: 0 }],
