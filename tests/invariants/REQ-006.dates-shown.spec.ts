@@ -11,7 +11,12 @@
 // at the team's 1 January 09:00 (UTC and the browser still on 31 December) shows 1 January 2027 on the entry itself;
 // and the drawn shape of every date (weekday or none, month full or short, order) is one shape across the own page,
 // the pending page, the person page and the approve, reject and cancel confirmations. Every earlier assertion kept.
-import { test, expect, type Browser, type Page } from '@playwright/test';
+// Slice 1, brief test-author-24: two ROW-138 cases added before ROW-139 — the month calendar's title and day cells
+// across 29 December 2026 to 4 January 2027 (each December and January view), and the dates the switch-off
+// confirmation and a switch-off refusal draw on the people page on 30 December 2026. Every earlier assertion kept.
+import { test, expect, type Browser, type Locator, type Page } from '@playwright/test';
+import { readCalendar } from './journey-pages';
+import { hasDate } from './page-reading';
 import { adminCancel, approve, freshName, PAGES, rename, setAllowance, setClock, type AccountId, type Actor, type Member } from './harness';
 import { actionControl, freshInt, openConfirmation } from './admin-kit';
 import {
@@ -23,8 +28,10 @@ import {
   NUMERIC_DATE,
   openPageIn,
   ownRecords,
+  canSignIn,
   pageTextWhen,
   pendingRecords,
+  sendApproved,
   sendOk,
   setTeamClock,
   shownDate,
@@ -332,6 +339,247 @@ test('ROW-138.one-format.the-same-day-is-drawn-alike-on-every-page-and-confirmat
   expect.soft(daySet.length, `ROW-138: 29 December 2026 is drawn in one shape everywhere — per source: ${JSON.stringify(dayShapes)}`).toBe(1);
   const allSet = [...new Set(Object.values(allShapes).flat())];
   expect.soft(allSet.length, `ROW-138: every date drawn with the month as a word has one shape everywhere — per source: ${JSON.stringify(allShapes)}`).toBe(1);
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-138, the calendar across New Year (added by test-author pass, slice 1, brief test-author-24)
+// ---------------------------------------------------------------------------------------------------
+
+/** The text a page shows and the labels it carries for assistive tech and tooltips (aria-label, title, datetime, data-date). */
+async function shownAndLabelled(page: Page): Promise<{ text: string; labels: string }> {
+  return page.evaluate(() => {
+    const labels: string[] = [];
+    for (const el of Array.from(document.body.querySelectorAll('*'))) {
+      for (const a of ['aria-label', 'title', 'datetime', 'data-date']) {
+        const v = el.getAttribute(a);
+        if (v) labels.push(v);
+      }
+    }
+    return { text: document.body.innerText || '', labels: labels.join(' | ') };
+  });
+}
+
+const NEW_YEAR_DAYS = ['2026-12-28', '2026-12-29', '2026-12-30', '2026-12-31', '2027-01-01', '2027-01-02', '2027-01-03', '2027-01-04', '2027-01-05'];
+/** The same day with the other year, as a week-numbering year draws it (US weeks put 27–31 Dec 2026 in 2027; ISO weeks put 1–3 Jan 2027 in 2026). */
+function otherYearOf(ymd: string): string {
+  const y = Number(ymd.slice(0, 4));
+  return `${ymd.slice(5, 7) === '12' ? y + 1 : y - 1}${ymd.slice(4)}`;
+}
+const MONTH_YEAR = (month: string, year: number) => new RegExp(`\\b${month},?\\s+${year}\\b`, 'i');
+const NEXT_MONTH = /next|›|»|→|forward|later/i;
+
+// ROW-138 promise: ROW-138 "every date the product shows uses one unambiguous format with the month as a word, and
+// ROW-138   the calendar year: 29 to 31 December and 1 to 3 January show the right year"; REQ-012 ("a month calendar for
+// ROW-138   any month, moving to the previous and next month; for each Monday to Friday day it lists by name the people
+// ROW-138   with an approved request covering that day"); D-044 (the page fetches the shown month and the two
+// ROW-138   neighbouring months the Monday-first grid shows).
+// ROW-138 wrong product: a calendar whose title or day keys are formatted with a week-numbering year — "YYYY" in
+// ROW-138   US weeks makes 29–31 December 2026 belong to 2027, so the December 2026 grid draws 2027's 29–31 December
+// ROW-138   (Bo's days, not Ann's); ISO weeks make 1–3 January 2027 belong to 2026, so the January title reads
+// ROW-138   "January 2026" and Ann is missing on Friday 1 January; or one that fetches the neighbouring month with the
+// ROW-138   wrong year.
+// ROW-138 given: Auckland, 1 December 2026 15:00; Ann approved Tue 29 – Thu 31 Dec 2026 and Fri 1 – Mon 4 Jan 2027
+// ROW-138   (and 8–9 Dec 2026 for the control); Bo approved Wed 29 – Fri 31 Dec 2027 — the same days a year later, the
+// ROW-138   decoy a week-year draws. when: Ann opens /calendar in an en-US Los Angeles browser (the December 2026 view,
+// ROW-138   today's month), then operates the next-month control (the January 2027 view). then: the December view's
+// ROW-138   title is December 2026, its cells list Ann on 29, 30 and 31 and not on 28, and Bo nowhere; the January
+// ROW-138   view's title is January 2027, its cells list Ann on 1 and 4 and not on 5, and Bo nowhere; neither view shows
+// ROW-138   or labels any of 28 December 2026 – 5 January 2027 with the other year (as text, a label or a datetime),
+// ROW-138   "December 2027" or "January 2026", or a date with a number month.
+// ROW-138 controls: the control case opens the December 2026 view and finds its title and Ann on 8 and 9 December,
+// ROW-138   mid-month days no week-year moves — the calendar, its cells and their reading work.
+// ROW-138 technique: the clock's origin — the days either side of New Year where calendar year and week-year part —
+// ROW-138   with the other-year decoy both as data (Bo) and as drawn text; both views, since US and ISO weeks fail on
+// ROW-138   opposite sides of 1 January.
+// ROW-138 cases: ROW-138 target=ROW-138.calendar.the-new-year-views-draw-each-day-in-its-calendar-year control=ROW-138.control.the-december-calendar-draws-a-mid-month-day
+async function newYearCalendar() {
+  const team = await startTeam({ zone: AUCKLAND, now: teamInstant(AUCKLAND, '2026-12-01', '15:00') });
+  const ann = await addMember(team, { name: freshName('Ann'), allowance: 25 });
+  const bo = await addMember(team, { name: freshName('Bo'), allowance: 25 });
+  await sendApproved(team, ann.actor, { kind: 'vacation', firstDay: '2026-12-08', lastDay: '2026-12-09' });
+  await sendApproved(team, ann.actor, { kind: 'vacation', firstDay: '2026-12-29', lastDay: '2026-12-31' });
+  await sendApproved(team, ann.actor, { kind: 'vacation', firstDay: '2027-01-01', lastDay: '2027-01-04' });
+  await sendApproved(team, bo.actor, { kind: 'vacation', firstDay: '2027-12-29', lastDay: '2027-12-31' });
+  return { team, ann, bo };
+}
+
+/** Waits (bounded) until the page's text names `monthYear` and `name`, then reads the calendar for `isoMonth`. */
+async function calendarView(page: Page, monthYear: RegExp, isoMonth: string, names: string[]) {
+  await page
+    .waitForFunction(
+      ([src, flags, n]) => new RegExp(src, flags).test(document.body.innerText) && document.body.innerText.includes(n),
+      [monthYear.source, monthYear.flags, names[0]] as [string, string, string],
+      { timeout: 15_000 },
+    )
+    .catch(() => undefined);
+  await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+  return { cal: await readCalendar(page, isoMonth, names), seen: await shownAndLabelled(page) };
+}
+
+test('ROW-138.control.the-december-calendar-draws-a-mid-month-day', async ({ browser }) => {
+  const w = await newYearCalendar();
+  const opened = await openPageIn(browser, w.ann.actor, BROWSER);
+  await opened.page.goto(PAGES.calendar);
+  const { cal, seen } = await calendarView(opened.page, MONTH_YEAR('December', 2026), '2026-12', [w.ann.member.name]);
+  expect.soft(MONTH_YEAR('December', 2026).test(seen.text), 'ROW-138 control: the calendar opens on December 2026').toBe(true);
+  expect.soft(cal.daysOf[w.ann.member.name], `ROW-138 control: Ann is listed on 8 December (cells ${JSON.stringify(cal.cells)})`).toContain(8);
+  expect.soft(cal.daysOf[w.ann.member.name], 'ROW-138 control: Ann is listed on 9 December').toContain(9);
+});
+
+test('ROW-138.calendar.the-new-year-views-draw-each-day-in-its-calendar-year', async ({ browser }) => {
+  const w = await newYearCalendar();
+  const ann = w.ann.member.name;
+  const bo = w.bo.member.name;
+  const opened = await openPageIn(browser, w.ann.actor, BROWSER);
+  const page = opened.page;
+  await page.goto(PAGES.calendar);
+
+  const views: { label: string; monthYear: RegExp; wrongTitles: RegExp[]; iso: string; ann: number[]; notAnn: number[] }[] = [
+    { label: 'December 2026', monthYear: MONTH_YEAR('December', 2026), wrongTitles: [MONTH_YEAR('December', 2027), MONTH_YEAR('January', 2026)], iso: '2026-12', ann: [29, 30, 31], notAnn: [28] },
+    { label: 'January 2027', monthYear: MONTH_YEAR('January', 2027), wrongTitles: [MONTH_YEAR('January', 2026), MONTH_YEAR('December', 2027)], iso: '2027-01', ann: [1, 4], notAnn: [5] },
+  ];
+  for (const [i, v] of views.entries()) {
+    if (i > 0) {
+      const next = page.getByRole('link', { name: NEXT_MONTH }).or(page.getByRole('button', { name: NEXT_MONTH })).filter({ visible: true }).first();
+      await expect(next, 'ROW-138: the calendar offers a next-month control (setup)').toBeVisible({ timeout: 10_000 });
+      await next.click();
+    }
+    const { cal, seen } = await calendarView(page, v.monthYear, v.iso, [ann, bo]);
+    const at = `ROW-138 ${v.label} view`;
+    const all = `${seen.text} | ${seen.labels}`;
+    expect.soft(v.monthYear.test(seen.text), `${at}: the title names ${v.label} — the page shows: ${JSON.stringify(seen.text.slice(0, 600))}`).toBe(true);
+    expect.soft(await page.getByRole('heading', { name: v.monthYear }).count(), `${at}: a heading names ${v.label}`).toBeGreaterThan(0);
+    for (const wrong of v.wrongTitles) expect.soft(wrong.test(all), `${at}: no ${wrong.source} (a week-numbering year) is shown or labelled`).toBe(false);
+    for (const d of v.ann) expect.soft(cal.daysOf[ann], `${at}: Ann is listed on day ${d} (cells ${JSON.stringify(cal.cells)})`).toContain(d);
+    for (const d of v.notAnn) expect.soft(cal.daysOf[ann], `${at}: Ann is not listed on day ${d}`).not.toContain(d);
+    expect.soft(cal.daysOf[bo], `${at}: Bo (29–31 December 2027) is listed on no day of this view`).toEqual([]);
+    expect.soft(seen.text.includes(bo), `${at}: Bo's name is not drawn at all`).toBe(false);
+    for (const day of NEW_YEAR_DAYS) {
+      const other = otherYearOf(day);
+      expect.soft(shownDate(other).test(all), `${at}: ${day} is never shown or labelled with the other year (${other})`).toBe(false);
+      expect.soft(seen.labels.includes(other), `${at}: no label or datetime carries ${other}`).toBe(false);
+    }
+    expect.soft(seen.text.match(NUMERIC_DATE)?.[0] ?? null, `${at}: shows no date with a number month`).toBeNull();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-138, the switch-off confirmation and refusal on 30 December (added by test-author pass, slice 1, brief
+// test-author-24)
+// ---------------------------------------------------------------------------------------------------
+
+/** What a press of `control` drew: a native dialog's message, the visible dialogs' text and the lines the page gained. */
+async function pressAndRead(page: Page, control: Locator): Promise<string> {
+  const before = new Set((await page.locator('body').innerText()).split('\n').map((l) => l.trim()).filter(Boolean));
+  let native = '';
+  page.once('dialog', (d) => {
+    native = d.message();
+    void d.dismiss().catch(() => undefined);
+  });
+  const step = page.locator('dialog[open], [role="dialog"], [role="alertdialog"]').filter({ visible: true });
+  const changed = async () => native !== '' || (await step.count()) > 0 || (await page.locator('body').innerText()).split('\n').some((l) => l.trim() && !before.has(l.trim()));
+  await control.click({ timeout: 10_000 });
+  await expect.poll(changed, { timeout: 10_000 }).toBe(true).catch(() => undefined);
+  await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+  const dialogs = (await step.allInnerTexts()).join(' | ');
+  const gained = (await page.locator('body').innerText())
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !before.has(l))
+    .join(' | ');
+  return [native, dialogs, gained].filter(Boolean).join(' | ');
+}
+
+const SWITCH_OFF = /switch|turn\s*off|deactivat|disable|\boff\b/i;
+
+/** The days of `days` the text names (in any English rendering) but not in full with the month as a word and its year; [] when none. */
+function namedInFull(text: string, days: string[]): string[] {
+  return days.filter((d) => hasDate(text, d) && !shownDate(d).test(text));
+}
+
+// ROW-138 promise: ROW-138 "every date the product shows uses one unambiguous format with the month as a word, and
+// ROW-138   the calendar year: 29 to 31 December and 1 to 3 January show the right year"; REQ-025 ("the admin is asked to
+// ROW-138   confirm in a step that names the person, the days and what will change, including which days are cancelled
+// ROW-138   and which stay"); REQ-016 / A-033 (switching off is refused while the account holds a pending request with a
+// ROW-138   Monday to Friday day before today).
+// ROW-138 wrong product: a switch-off confirmation that draws "30 December 2027" (US week-year of 30 Dec 2026) or
+// ROW-138   "1 January 2026" (ISO week-year of 1 Jan 2027), the UTC or browser date (29 December) for today's cancel day,
+// ROW-138   "12/30/2026" from the browser's en-US locale, or "30 Dec" without a year; a refusal that names the pending
+// ROW-138   request's days the same wrong ways.
+// ROW-138 given: Auckland; on 1 December 2026 Mona has an approved vacation Mon 28 – Thu 31 Dec 2026 and a pending
+// ROW-138   one Fri 1 – Tue 5 Jan 2027, Rhea a pending vacation Tue 29 – Thu 31 Dec 2026; the clock then at Wed 30
+// ROW-138   December 2026 09:00 (UTC and the Los Angeles browser still on 29 December). when: the admin, in an en-US Los
+// ROW-138   Angeles browser on /admin/people, operates Mona's switch-off control (the confirmation read, never
+// ROW-138   confirmed), then Rhea's (whatever it draws read; a confirmation it opens is confirmed, so a refusal made at
+// ROW-138   the act is drawn). then: Mona's confirmation shows 30 December 2026 (her first cancelled day) and 1 January
+// ROW-138   2027 (her pending request) in full; every one of 28 December 2026 – 5 January 2027 it names, it names in
+// ROW-138   full with its own year; it shows none of those days with the other year and no number-month date; Rhea's
+// ROW-138   refusal names every one of 29 – 31 December 2026 it names in full, none with the other year, and no
+// ROW-138   number-month date.
+// ROW-138 controls: the control case shows the confirmation is reached — Mona's control opens a confirmation naming
+// ROW-138   her — and here Rhea is still switched on afterwards (she signs in), the press drew something, and what it
+// ROW-138   drew names a day of her pending request in some rendering (29 Dec, 12/29 …) — so the refusal was reached and
+// ROW-138   its dates are read, never an empty text passing the format checks.
+// ROW-138 technique: the clock's origin — the one week whose days split between calendar year and week-year, on
+// ROW-138   the day the team, UTC and the browser differ — read on the drawn confirmation and refusal themselves.
+// ROW-138 cases: ROW-138 target=ROW-138.switch-off.the-confirmation-and-the-refusal-draw-new-year-days-in-full control=ROW-138.control.the-switch-off-confirmation-names-the-person
+async function newYearSwitchOff() {
+  const team = await startTeam({ zone: AUCKLAND, now: teamInstant(AUCKLAND, '2026-12-01', '15:00') });
+  const mona = await addMember(team, { name: freshName('Mona'), allowance: 25 });
+  const rhea = await addMember(team, { name: freshName('Rhea'), allowance: 25 });
+  await sendApproved(team, mona.actor, { kind: 'vacation', firstDay: '2026-12-28', lastDay: '2026-12-31' });
+  await sendOk(mona.actor, { kind: 'vacation', firstDay: '2027-01-01', lastDay: '2027-01-05' });
+  await sendOk(rhea.actor, { kind: 'vacation', firstDay: '2026-12-29', lastDay: '2026-12-31' });
+  const now = await setTeamClock(AUCKLAND, '2026-12-30', '09:00');
+  expect(utcDateOf(now) === '2026-12-29' && teamDateOf(LOS_ANGELES, now) === '2026-12-29', 'ROW-138 setup: UTC and the browser are still on 29 December 2026').toBe(true);
+  return { team, mona: mona.member, rhea: rhea.member };
+}
+
+async function monaConfirmation(browser: Browser, w: Awaited<ReturnType<typeof newYearSwitchOff>>, what: string): Promise<string> {
+  const opened = await openPageIn(browser, w.team.admin, BROWSER);
+  await pageTextWhen(opened, PAGES.adminPeople, [literally(w.mona.name), literally(w.rhea.name)]);
+  const control = actionControl(opened.page, w.mona.name, [w.rhea.name, w.team.install.admin.name], SWITCH_OFF);
+  const conf = await openConfirmation(opened.page, control, /switch off|turn off|deactivat|disable|confirm/i, what);
+  await opened.close();
+  return conf.text;
+}
+
+test('ROW-138.control.the-switch-off-confirmation-names-the-person', async ({ browser }) => {
+  const w = await newYearSwitchOff();
+  const text = await monaConfirmation(browser, w, 'ROW-138 control switch off');
+  expect(text.includes(w.mona.name), `ROW-138 control: Mona's switch-off confirmation names her — it shows: ${JSON.stringify(text.slice(0, 800))}`).toBe(true);
+});
+
+test('ROW-138.switch-off.the-confirmation-and-the-refusal-draw-new-year-days-in-full', async ({ browser }) => {
+  const w = await newYearSwitchOff();
+  const conf = await monaConfirmation(browser, w, 'ROW-138 switch off');
+  const c = `ROW-138 Mona's switch-off confirmation — it shows: ${JSON.stringify(conf.slice(0, 800))}`;
+  expect.soft(shownDate('2026-12-30').test(conf), `${c}: 30 December 2026, her first cancelled day, in full`).toBe(true);
+  expect.soft(shownDate('2027-01-01').test(conf), `${c}: 1 January 2027, her pending request, in full`).toBe(true);
+  expect.soft(namedInFull(conf, NEW_YEAR_DAYS), `${c}: every day it names it names in full with its year`).toEqual([]);
+  for (const day of NEW_YEAR_DAYS) expect.soft(shownDate(otherYearOf(day)).test(conf), `${c}: ${day} is not shown as ${otherYearOf(day)}`).toBe(false);
+  expect.soft(conf.match(NUMERIC_DATE)?.[0] ?? null, `${c}: no date with a number month`).toBeNull();
+
+  const opened = await openPageIn(browser, w.team.admin, BROWSER);
+  const page = opened.page;
+  await pageTextWhen(opened, PAGES.adminPeople, [literally(w.rhea.name)]);
+  let refusal = await pressAndRead(page, actionControl(page, w.rhea.name, [w.mona.name, w.team.install.admin.name], SWITCH_OFF));
+  const confirmBtn = page
+    .locator('dialog[open], [role="dialog"], [role="alertdialog"]')
+    .filter({ visible: true })
+    .getByRole('button', { name: /^\s*(confirm|yes|ok|switch off|turn off)\b/i })
+    .first();
+  if ((await confirmBtn.count()) > 0) refusal += ' | ' + (await pressAndRead(page, confirmBtn));
+  await opened.close();
+  expect(await canSignIn(w.rhea.email, w.rhea.password), 'ROW-138 control: Rhea is still switched on (the switch-off was refused)').toBe(true);
+  expect(refusal.trim().length, 'ROW-138 control: the press on Rhea drew something').toBeGreaterThan(0);
+  test.info().annotations.push({ type: 'ROW-138 refusal drawn', description: refusal.slice(0, 800) }, { type: 'ROW-138 confirmation drawn', description: conf.slice(0, 800) });
+  const r = `ROW-138 Rhea's switch-off refusal — it shows: ${JSON.stringify(refusal.slice(0, 800))}`;
+  const rheaDays = ['2026-12-29', '2026-12-30', '2026-12-31'];
+  expect(rheaDays.some((d) => hasDate(refusal, d)), `ROW-138 control: the refusal names a day of Rhea's pending request (in any rendering), so its format is read — it shows: ${JSON.stringify(refusal.slice(0, 800))}`).toBe(true);
+  expect.soft(namedInFull(refusal, rheaDays), `${r}: every day it names it names in full with its year`).toEqual([]);
+  for (const day of rheaDays) expect.soft(shownDate(otherYearOf(day)).test(refusal), `${r}: ${day} is not shown as ${otherYearOf(day)}`).toBe(false);
+  expect.soft(refusal.match(NUMERIC_DATE)?.[0] ?? null, `${r}: no date with a number month`).toBeNull();
 });
 
 // ---------------------------------------------------------------------------------------------------

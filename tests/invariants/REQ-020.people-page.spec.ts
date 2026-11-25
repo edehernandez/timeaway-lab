@@ -9,7 +9,15 @@
 // its facts read by value (records.ts). The values are chosen unusual (37, 41, 34, 39, 173, 181, 170) so that no id,
 // date or count of the fixture can supply them.
 // The clock: Mon 2027-03-01 09:00 in Pacific/Auckland, so the current year is 2027 and the next 2028.
-import { test, expect, type Page } from '@playwright/test';
+// Slice 1, brief test-author-24: a ROW-098 case and a ROW-099 case added after each row's first — ROW-098 reads
+// both years' figures and the switched-on state on the drawn people page row itself (lesson L-1), each figure in a
+// cell whose column names its year and what it is; ROW-099 presses each of the six actions' controls on the page,
+// operates the step each opens, and reads its effect back on that account and no other. Every earlier assertion kept.
+import { test, expect, type Locator, type Page } from '@playwright/test';
+import { actionControl, freshInt, openConfirmation } from './admin-kit';
+import { hasNumber, withoutLiterals } from './page-reading';
+import { pollUntil } from './page-rows';
+import { canSignIn } from './team-calendar';
 import {
   anonymousApi,
   approve,
@@ -175,6 +183,224 @@ test('ROW-098.REQ-020.each-listed-account-holds-every-named-field', async () => 
 });
 
 // ---------------------------------------------------------------------------------------------------
+// ROW-098, the drawn row (added by test-author pass, slice 1, brief test-author-24).
+// ROW-098 promise: REQ-020 fail-if (2) "a listed account lacks its name, email, switched-on state, either year's
+// ROW-098   allowance or either year's days left" — an account AS THE PAGE LISTS IT (REQ-020 "a people page listing
+// ROW-098   every account with its name, email, whether it is switched on, its allowance for the current and the next
+// ROW-098   year and its days left for the current and the next year"; A-031, A-043); lesson L-1.
+// ROW-098 wrong product: a people page whose data carries both years but whose table draws the current year only (no
+// ROW-098   next-year allowance or days left), or the allowance without the days left, or draws the next year's figures
+// ROW-098   under the current year's column, or leaves the switched-on state to the label of a Switch off button.
+// ROW-098 given: Mona, switched on, allowance 37 for 2027 and 41 from 2028, 3 days approved in 2027 and 2 in 2028
+// ROW-098   (days left 34 and 39); Otto, switched off, allowance 23 (days left 23). when: the admin opens /admin/people.
+// ROW-098   then: Mona's drawn row (the largest element holding her email and no other account's) shows her name, her
+// ROW-098   email, and 37, 41, 34 and 39 as numbers of their own; each of the four is in a cell whose column label (its
+// ROW-098   table header, its own label) or own text names the figure (allowance / days left) and its year (2027 or
+// ROW-098   "this year" / 2028 or "next year"), never the other year; outside its controls Mona's row says switched on
+// ROW-098   (or carries a checked switch) and Otto's says switched off (or an unchecked one), never the other.
+// ROW-098 controls: the control case above (Mona's record in the data holds her name); here the page is reached
+// ROW-098   (200) and both rows are drawn, so a missing figure is the drawing, never a missing row.
+// ROW-098 technique: unusual, distinct values per field (no id, date or count equals any), read on the row's own
+// ROW-098   cells with the run-id digits of name and email removed; the column association so a swapped year fails.
+// ROW-098 cases: ROW-098 target=ROW-098.REQ-020.the-drawn-row-shows-both-years-figures-and-the-switched-on-state control=ROW-098.control.the-people-data-holds-the-members-record
+
+interface DrawnCell {
+  label: string;
+  text: string;
+}
+
+interface DrawnAccount {
+  found: boolean;
+  text: string;
+  plain: string;
+  switches: { name: string; checked: boolean }[];
+  cells: DrawnCell[];
+}
+
+/**
+ * The drawn row of one account on the loaded page: the largest element holding `email` and none of `others`
+ * (records.ts textAbout's reading). `plain` is its text with every control taken out; `switches` its checkbox and
+ * switch controls; `cells` its table cells (td, th, role cell or gridcell; else its child elements), each with its
+ * column label — the text of every header cell covering its column, its own aria-label, data-label and title, and
+ * its ::before content — and its own text.
+ */
+async function drawnAccount(page: Page, email: string, others: string[]): Promise<DrawnAccount> {
+  return page.evaluate(
+    ({ email, others }) => {
+      const lower = email.toLowerCase();
+      const otherLower = others.map((o) => o.toLowerCase()).filter((o) => o !== lower);
+      let host: Element | null = null;
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if ((n.textContent || '').toLowerCase().includes(lower)) {
+          host = n.parentElement;
+          break;
+        }
+      }
+      if (!host) return { found: false, text: '', plain: '', switches: [], cells: [] };
+      let row: Element = host;
+      while (row.parentElement && row.parentElement !== document.body && row.parentElement !== document.documentElement) {
+        const t = (row.parentElement.textContent || '').toLowerCase();
+        if (otherLower.some((o) => t.includes(o))) break;
+        row = row.parentElement;
+      }
+      const norm = (x: string) => x.replace(/\s+/g, ' ').trim();
+      const CONTROLS = 'button, a[href], input, select, textarea, [role="button"], [role="link"], [role="switch"], [role="checkbox"]';
+      const plainOf = (el: Element): string => {
+        const clone = el.cloneNode(true) as HTMLElement;
+        clone.querySelectorAll(CONTROLS).forEach((c) => c.remove());
+        document.body.appendChild(clone);
+        clone.style.position = 'absolute';
+        clone.style.left = '-99999px';
+        const t = clone.innerText || clone.textContent || '';
+        clone.remove();
+        return norm(t);
+      };
+      const switches = Array.from(row.querySelectorAll('input[type="checkbox"], [role="switch"], [role="checkbox"]')).map((c) => {
+        const h = c as HTMLInputElement;
+        const checked = h instanceof HTMLInputElement ? h.checked : c.getAttribute('aria-checked') === 'true';
+        const labels = h.labels ? Array.from(h.labels).map((l) => l.textContent || '').join(' ') : '';
+        return { name: norm(c.getAttribute('aria-label') || labels || c.textContent || ''), checked };
+      });
+      const before = (el: Element) => {
+        const c = getComputedStyle(el, '::before').content;
+        return c && c !== 'none' && c !== 'normal' ? c.replace(/^["']|["']$/g, '') : '';
+      };
+      const ownLabel = (el: Element) =>
+        [el.getAttribute('aria-label'), el.getAttribute('data-label'), el.getAttribute('title'), before(el)].filter(Boolean).join(' ');
+      const columnOf = (cell: HTMLTableCellElement): number => {
+        let col = 0;
+        const tr = cell.parentElement as HTMLTableRowElement;
+        for (const c of Array.from(tr.cells)) {
+          if (c === cell) return col;
+          col += c.colSpan || 1;
+        }
+        return col;
+      };
+      const headerText = (cell: HTMLTableCellElement): string => {
+        const table = cell.closest('table');
+        if (!table) return '';
+        const col = columnOf(cell);
+        const headRows = Array.from(table.rows).filter(
+          (r) => (r.parentElement && r.parentElement.tagName === 'THEAD') || (r.cells.length > 0 && Array.from(r.cells).every((c) => c.tagName === 'TH')),
+        );
+        const parts: string[] = [];
+        for (const r of headRows) {
+          if (r === cell.parentElement) continue;
+          let at = 0;
+          for (const c of Array.from(r.cells)) {
+            const span = c.colSpan || 1;
+            if (col >= at && col < at + span) {
+              parts.push(norm(c.textContent || '') + ' ' + ownLabel(c));
+              break;
+            }
+            at += span;
+          }
+        }
+        return norm(parts.join(' '));
+      };
+      let cellEls = Array.from(row.querySelectorAll('td, th, [role="cell"], [role="gridcell"]'));
+      if (cellEls.length === 0) cellEls = Array.from(row.children);
+      const cells = cellEls.map((c) => ({
+        label: norm((c instanceof HTMLTableCellElement ? headerText(c) : '') + ' ' + ownLabel(c)),
+        text: plainOf(c),
+      }));
+      return { found: true, text: norm((row as HTMLElement).innerText || ''), plain: plainOf(row), switches, cells };
+    },
+    { email, others },
+  );
+}
+
+const ALLOWANCE_WORD = /allowance|entitle/i;
+const DAYS_LEFT_WORD = /days?\s*left|left|remaining|balance/i;
+const THIS_YEAR = (y: number) => new RegExp(`(?<!\\d)${y}(?!\\d)|this year|current`, 'i');
+const NEXT_YEAR = (y: number) => new RegExp(`(?<!\\d)${y}(?!\\d)|next year`, 'i');
+
+/** The part of `text` about the year `yRe`: from its mention up to the other year's (all of it when it names neither year; null when it names only the other). */
+function yearPart(text: string, yRe: RegExp, otherRe: RegExp): string | null {
+  const a = text.search(yRe);
+  const b = text.search(otherRe);
+  if (a < 0 && b < 0) return text;
+  if (a < 0) return null;
+  if (b < 0 || b < a) return text.slice(a);
+  return text.slice(a, b);
+}
+
+/**
+ * True when some cell shows `n` as the figure `what` of the year `yRe`: the figure's word in the cell's label or
+ * text; the year named by the label (and not the other year) or by the cell's own text, n standing in that year's part.
+ */
+function figureInCell(cells: DrawnCell[], what: RegExp, yRe: RegExp, otherRe: RegExp, n: number, literals: string[]): boolean {
+  return cells.some((c) => {
+    const text = withoutLiterals(c.text, literals);
+    if (!what.test(`${c.label} ${text}`)) return false;
+    const labelYear = yRe.test(c.label) && !otherRe.test(c.label);
+    const labelOther = otherRe.test(c.label) && !yRe.test(c.label);
+    if (labelOther) return false;
+    if (labelYear) {
+      const part = yearPart(text, yRe, otherRe);
+      return part !== null && hasNumber(part.replace(yRe, ' '), n);
+    }
+    if (!yRe.test(text)) return false;
+    const part = yearPart(text, yRe, otherRe);
+    return part !== null && hasNumber(part.replace(yRe, ' '), n);
+  });
+}
+
+const ON_WORD = /(?<![a-z])(switched on|on|active|enabled)(?![a-z])/i;
+const OFF_WORD = /(?<![a-z])(switched off|off|inactive|disabled|deactivated)(?![a-z])/i;
+
+test('ROW-098.REQ-020.the-drawn-row-shows-both-years-figures-and-the-switched-on-state', async ({ browser }) => {
+  const t = await team();
+  const emails = [t.install.admin.email, t.on.email, t.off.email];
+  const opened = await openPage(browser, t.admin);
+  try {
+    const res = await opened.page.goto(PAGES.adminPeople);
+    expect(res?.status(), 'ROW-098: /admin/people is reached (setup)').toBe(200);
+    await opened.page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    let mona: DrawnAccount = { found: false, text: '', plain: '', switches: [], cells: [] };
+    await expect
+      .poll(async () => (mona = await drawnAccount(opened.page, t.on.email, emails)).found && hasNumber(withoutLiterals(mona.text, [t.on.name, t.on.email]), 39), { timeout: 10_000 })
+      .toBe(true)
+      .catch(() => undefined);
+    const otto = await drawnAccount(opened.page, t.off.email, emails);
+    expect(mona.found && otto.found, 'ROW-098: both members are drawn on the page').toBe(true);
+
+    const lits = [t.on.name, t.on.email];
+    const row = withoutLiterals(mona.plain, lits);
+    const m = `ROW-098: Mona's drawn row (${JSON.stringify(mona.text)}; cells ${JSON.stringify(mona.cells)})`;
+    expect.soft(mona.text.includes(t.on.name), `${m} shows her name`).toBe(true);
+    expect.soft(mona.text.toLowerCase().includes(t.on.email.toLowerCase()), `${m} shows her email`).toBe(true);
+    for (const [n, what] of [
+      [37, "the current year's allowance"],
+      [41, "the next year's allowance"],
+      [34, "the current year's days left"],
+      [39, "the next year's days left"],
+    ] as [number, string][]) {
+      expect.soft(hasNumber(row, n), `${m} shows ${what} ${n}`).toBe(true);
+    }
+    const y0 = THIS_YEAR(2027);
+    const y1 = NEXT_YEAR(2028);
+    expect.soft(figureInCell(mona.cells, ALLOWANCE_WORD, y0, y1, 37, lits), `${m}: 37 is drawn as the 2027 allowance`).toBe(true);
+    expect.soft(figureInCell(mona.cells, ALLOWANCE_WORD, y1, y0, 41, lits), `${m}: 41 is drawn as the 2028 allowance`).toBe(true);
+    expect.soft(figureInCell(mona.cells, DAYS_LEFT_WORD, y0, y1, 34, lits), `${m}: 34 is drawn as the 2027 days left`).toBe(true);
+    expect.soft(figureInCell(mona.cells, DAYS_LEFT_WORD, y1, y0, 39, lits), `${m}: 39 is drawn as the 2028 days left`).toBe(true);
+
+    const o = `ROW-098: Otto's drawn row (${JSON.stringify(otto.text)})`;
+    expect.soft(otto.text.includes(t.off.name), `${o} shows his name`).toBe(true);
+    expect.soft(hasNumber(withoutLiterals(otto.plain, [t.off.name, t.off.email]), 23), `${o} shows his allowance and days left 23`).toBe(true);
+    expect.soft(hasNumber(withoutLiterals(otto.plain, [t.off.name, t.off.email]), 37), `${o} does not show Mona's allowance (the right values on the right rows)`).toBe(false);
+
+    const monaOn = (ON_WORD.test(mona.plain) && !OFF_WORD.test(mona.plain)) || (mona.switches.length > 0 && mona.switches.every((s) => s.checked));
+    const ottoOff = (OFF_WORD.test(otto.plain) && !ON_WORD.test(otto.plain)) || (otto.switches.length > 0 && otto.switches.every((s) => !s.checked));
+    expect.soft(monaOn, `${m} says switched on outside its controls (plain ${JSON.stringify(mona.plain)}; switches ${JSON.stringify(mona.switches)})`).toBe(true);
+    expect.soft(ottoOff, `${o} says switched off outside its controls (plain ${JSON.stringify(otto.plain)}; switches ${JSON.stringify(otto.switches)})`).toBe(true);
+  } finally {
+    await opened.close();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
 // ROW-099 promise: REQ-020 fail-if (3) "any of the six account actions (including changing an email) cannot be started
 // ROW-099   from the page"; REQ-020 "from it the admin creates accounts, changes a name, changes an email, sets a new
 // ROW-099   password, changes an allowance and switches an account off or on" (A-031, A-044). D-029: forms are labelled
@@ -245,6 +471,260 @@ test('ROW-099.REQ-020.each-of-the-six-account-actions-starts-from-the-page', asy
       expect.soft(has(mona.controls, re), `ROW-099: Mona's row starts "${what}" (her row's controls: ${show(mona.controls)})`).toBe(true);
     }
     expect.soft(has(otto.controls, /switch|turn\s*on|reactivat|activat|enable|\bon\b/i), `ROW-099: Otto's row (switched off) starts switching him on (his row's controls: ${show(otto.controls)})`).toBe(true);
+  } finally {
+    await opened.close();
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-099, each action operated (added by test-author pass, slice 1, brief test-author-24).
+// ROW-099 promise: REQ-020 fail-if (3) "any of the six account actions (including changing an email) cannot be
+// ROW-099   started from the page"; REQ-020 "from it the admin creates accounts, changes a name, changes an email, sets a
+// ROW-099   new password, changes an allowance and switches an account off or on" (A-031, A-044, A-043); D-046 ("the
+// ROW-099   people page starts its account actions (rename, change email, set password, change allowance) from each row
+// ROW-099   in a dialog that posts to that account's route by id"); REQ-025 (switching off asks to confirm).
+// ROW-099 wrong product: controls named for each action that open nothing, open the wrong step (the rename button
+// ROW-099   opening the email field), or post to the wrong account (every row's dialog posting to the first account's
+// ROW-099   id); a switch control that only toggles a label; a create button that opens a form whose submit fails.
+// ROW-099 given: Mona (on, allowance 37) and Otto (off), the admin. when: on /admin/people the admin presses, in
+// ROW-099   Mona's row, the control naming her name and fills the step's name field with a fresh name and submits; the
+// ROW-099   control naming email, a fresh email; password, a fresh password; allowance, a fresh number (this year); the
+// ROW-099   switch control, confirming the confirmation step; in Otto's row the switch control; and the page's create
+// ROW-099   control, filling name, email, password and allowance with fresh values. then: each press opens a step
+// ROW-099   holding a field labelled for that action (name, email, password, allowance; the switch-off a confirmation);
+// ROW-099   and each effect lands on that account: the people data holds Mona's new name, then her new email and not the
+// ROW-099   old, then her new allowance; Mona signs in with the new password and not the old; Mona then gives no
+// ROW-099   session (off) and Otto signs in (on); the new account is in the people data with its name and signs in.
+// ROW-099   Otto's and the admin's names and emails are unchanged throughout.
+// ROW-099 controls: ROW-099's first control case (the page is drawn with Mona's row); here each effect is read on
+// ROW-099   the people data first absent (the fresh value is not there before its action), then present.
+// ROW-099 technique: before and after per action, fresh values per run, the neighbouring account (Otto, the admin)
+// ROW-099   as the decoy that must stay untouched; each action's failure is caught and reported by name so one missing
+// ROW-099   step never hides the next.
+// ROW-099 cases: ROW-099 target=ROW-099.REQ-020.each-account-action-pressed-on-the-page-lands-on-that-account control=ROW-099.control.the-people-page-is-drawn-with-the-members-row
+
+const STEP = 'dialog[open], [role="dialog"], [role="alertdialog"]';
+const SUBMIT = /^\s*(save|rename|change|set|update|confirm|apply|ok|submit|create|add)\b/i;
+const NOT_SUBMIT = /^\s*(cancel|close|back|no)\b|^×$/i;
+
+/** The step a press opened: a visible dialog when one opened, else `fallback` (an inline form in the row or the page). */
+async function stepScope(page: Page, field: RegExp, fallback: Locator): Promise<Locator> {
+  const dialog = page.locator(STEP).filter({ visible: true }).filter({ has: page.getByLabel(field) }).last();
+  const inline = fallback.getByLabel(field).filter({ visible: true });
+  await expect
+    .poll(async () => (await dialog.count()) > 0 || (await inline.count()) > 0, { timeout: 10_000 })
+    .toBe(true)
+    .catch(() => undefined);
+  if ((await dialog.count()) > 0) return dialog;
+  return fallback;
+}
+
+/** Fills the step's visible fields labelled `field` (every one: a password and its repeat) with `value`. */
+async function fillField(scope: Locator, field: RegExp, value: string, what: string): Promise<void> {
+  const fields = scope.getByLabel(field).filter({ visible: true });
+  const n = await fields.count();
+  expect(n, `ROW-099 ${what}: the step holds a field labelled ${field}`).toBeGreaterThan(0);
+  for (let i = 0; i < n; i += 1) {
+    const f = fields.nth(i);
+    const tag = await f.evaluate((el) => el.tagName.toLowerCase());
+    const type = (await f.getAttribute('type')) ?? '';
+    if (tag === 'input' && !['radio', 'checkbox', 'submit', 'button', 'hidden'].includes(type)) await f.fill(value);
+    else if (tag === 'textarea') await f.fill(value);
+  }
+}
+
+/** Presses the step's submitting button (save, change, set, create …), else presses Enter in its first field. */
+async function submitStep(scope: Locator, firstField: RegExp): Promise<void> {
+  const buttons = scope.getByRole('button').filter({ visible: true });
+  const n = await buttons.count();
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const b = buttons.nth(i);
+    const name = ((await b.getAttribute('aria-label')) ?? (await b.innerText())).trim();
+    if (SUBMIT.test(name) && !NOT_SUBMIT.test(name)) {
+      await b.click();
+      return;
+    }
+  }
+  await scope.getByLabel(firstField).filter({ visible: true }).first().press('Enter');
+}
+
+/** Opens /admin/people and waits (bounded) until the account holding `email` is drawn. */
+async function peoplePage(page: Page, email: string): Promise<void> {
+  await page.goto(PAGES.adminPeople);
+  await expect.poll(() => pageHolds(page, email), { timeout: 10_000 }).toBe(true).catch(() => undefined);
+  await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+}
+
+/** The innermost row-like element that shows `email` and none of `others` (the account's row as a locator). */
+function rowOf(page: Page, email: string, others: string[]): Locator {
+  let row = page.locator('tr, li, article, section, form, fieldset, div').filter({ hasText: email });
+  for (const o of others) if (o.toLowerCase() !== email.toLowerCase()) row = row.filter({ hasNotText: o });
+  return row.last();
+}
+
+async function attempt(what: string, fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (e) {
+    expect.soft(`${(e as Error).message}`.split('\n').slice(0, 4).join(' | '), `ROW-099: ${what} could not be done from the page`).toBe('');
+  }
+}
+
+test('ROW-099.REQ-020.each-account-action-pressed-on-the-page-lands-on-that-account', async ({ browser }) => {
+  const t = await team();
+  const opened = await openPage(browser, t.admin);
+  const page = opened.page;
+  const admin = t.install.admin;
+  let monaEmail = t.on.email;
+  let monaPassword = t.on.password;
+  const everyone = () => [admin.email, monaEmail, t.off.email];
+  const people = () => observePeople(t.admin);
+  try {
+    // Change a name.
+    const newName = freshName('Mona');
+    await attempt('changing a name', async () => {
+      expect(recordByEmail(await people(), monaEmail) && holdsValue(recordByEmail(await people(), monaEmail), newName), 'ROW-099 rename: the new name is not there before').toBe(false);
+      await peoplePage(page, monaEmail);
+      const row = rowOf(page, monaEmail, everyone());
+      await actionControl(page, monaEmail, everyone().filter((e) => e !== monaEmail), /name/i).click();
+      const scope = await stepScope(page, /name/i, row);
+      await fillField(scope, /name/i, newName, 'rename');
+      await submitStep(scope, /name/i);
+      const after = await pollUntil(people, (p) => holdsValue(recordByEmail(p, monaEmail), newName));
+      expect.soft(holdsValue(recordByEmail(after, monaEmail), newName), `ROW-099 rename: Mona's record holds the new name (${show(recordByEmail(after, monaEmail))})`).toBe(true);
+    });
+
+    // Change an email.
+    const newEmail = freshEmail('mona-new');
+    await attempt('changing an email', async () => {
+      expect(recordByEmail(await people(), newEmail), 'ROW-099 email: the new email is not there before').toBeUndefined();
+      await peoplePage(page, monaEmail);
+      const row = rowOf(page, monaEmail, everyone());
+      await actionControl(page, monaEmail, everyone().filter((e) => e !== monaEmail), /e-?mail/i).click();
+      const scope = await stepScope(page, /e-?mail/i, row);
+      await fillField(scope, /e-?mail/i, newEmail, 'email');
+      await submitStep(scope, /e-?mail/i);
+      const after = await pollUntil(people, (p) => recordByEmail(p, newEmail) !== undefined);
+      const rec = recordByEmail(after, newEmail);
+      expect.soft(rec, 'ROW-099 email: an account now holds the new email').toBeDefined();
+      expect.soft(rec && (holdsValue(rec, newName) || holdsValue(rec, t.on.name) || holdsValue(rec, t.on.id)), `ROW-099 email: it is Mona's account (${show(rec)})`).toBe(true);
+      expect.soft(recordByEmail(after, t.on.email), "ROW-099 email: Mona's old email is gone").toBeUndefined();
+      if (rec) monaEmail = newEmail;
+    });
+
+    // Set a new password.
+    const newPassword = freshPassword();
+    await attempt('setting a new password', async () => {
+      expect(await canSignIn(monaEmail, newPassword), 'ROW-099 password: the new password does not sign in before').toBe(false);
+      expect(await canSignIn(monaEmail, monaPassword), 'ROW-099 password: her current password signs her in before').toBe(true);
+      await peoplePage(page, monaEmail);
+      const row = rowOf(page, monaEmail, everyone());
+      await actionControl(page, monaEmail, everyone().filter((e) => e !== monaEmail), /password/i).click();
+      const scope = await stepScope(page, /password/i, row);
+      await fillField(scope, /password/i, newPassword, 'password');
+      await submitStep(scope, /password/i);
+      const ok = await pollUntil(() => canSignIn(monaEmail, newPassword), (v) => v);
+      expect.soft(ok, 'ROW-099 password: Mona signs in with the new password').toBe(true);
+      expect.soft(await canSignIn(monaEmail, t.on.password), 'ROW-099 password: her old password no longer signs her in').toBe(false);
+      if (ok) monaPassword = newPassword;
+    });
+
+    // Change an allowance (this year).
+    const newAllowance = freshInt(43, 49);
+    await attempt('changing an allowance', async () => {
+      expect(holdsValue(recordByEmail(await people(), monaEmail), newAllowance), 'ROW-099 allowance: the new allowance is not there before').toBe(false);
+      await peoplePage(page, monaEmail);
+      const row = rowOf(page, monaEmail, everyone());
+      await actionControl(page, monaEmail, everyone().filter((e) => e !== monaEmail), /allowance/i).click();
+      const field = /allowance|days/i;
+      const scope = await stepScope(page, field, row);
+      const thisYear = scope.getByLabel(/this year|2027|current/i).filter({ visible: true });
+      for (let i = 0; i < (await thisYear.count()); i += 1) {
+        const type = (await thisYear.nth(i).getAttribute('type')) ?? '';
+        if (type === 'radio' || type === 'checkbox') await thisYear.nth(i).check();
+      }
+      const selects = scope.locator('select').filter({ visible: true });
+      for (let i = 0; i < (await selects.count()); i += 1) {
+        const labels = await selects.nth(i).locator('option').allInnerTexts();
+        const pick = labels.find((l) => /this year|2027|current/i.test(l));
+        if (pick) await selects.nth(i).selectOption({ label: pick });
+      }
+      await fillField(scope, field, String(newAllowance), 'allowance');
+      await submitStep(scope, field);
+      const after = await pollUntil(people, (p) => holdsValue(recordByEmail(p, monaEmail), newAllowance));
+      expect.soft(holdsValue(recordByEmail(after, monaEmail), newAllowance), `ROW-099 allowance: Mona's record holds the new allowance ${newAllowance} (${show(recordByEmail(after, monaEmail))})`).toBe(true);
+    });
+
+    // Switch an account off (Mona), through its confirmation.
+    await attempt('switching an account off', async () => {
+      expect(await canSignIn(monaEmail, monaPassword), 'ROW-099 switch off: Mona signs in before').toBe(true);
+      await peoplePage(page, monaEmail);
+      const control = actionControl(page, monaEmail, everyone().filter((e) => e !== monaEmail), /switch|turn\s*off|deactivat|disable|\boff\b/i);
+      const conf = await openConfirmation(page, control, /switch off|turn off|deactivat|disable|confirm/i, 'ROW-099 switch off');
+      await conf.confirm();
+      const off = await pollUntil(() => canSignIn(monaEmail, monaPassword), (v) => !v);
+      expect.soft(off, 'ROW-099 switch off: Mona gives no session afterwards').toBe(false);
+    });
+
+    // Switch an account on (Otto).
+    await attempt('switching an account on', async () => {
+      expect(await canSignIn(t.off.email, t.off.password), 'ROW-099 switch on: Otto gives no session before').toBe(false);
+      await peoplePage(page, t.off.email);
+      page.once('dialog', (d) => void d.accept());
+      await actionControl(page, t.off.email, everyone().filter((e) => e !== t.off.email), /switch|turn\s*on|reactivat|activat|enable|\bon\b/i).click();
+      const dialog = page.locator(STEP).filter({ visible: true }).last();
+      if (await dialog.waitFor({ state: 'visible', timeout: 3_000 }).then(() => true, () => false)) {
+        const b = dialog.getByRole('button', { name: /^\s*(confirm|yes|ok|switch on|turn on|activate|enable)\b/i }).first();
+        if ((await b.count()) > 0) await b.click();
+      }
+      const on = await pollUntil(() => canSignIn(t.off.email, t.off.password), (v) => v);
+      expect.soft(on, 'ROW-099 switch on: Otto signs in afterwards').toBe(true);
+    });
+
+    // Create an account.
+    const created = { name: freshName('Cleo'), email: freshEmail('cleo'), password: freshPassword(), allowance: freshInt(11, 19) };
+    await attempt('creating an account', async () => {
+      expect(recordByEmail(await people(), created.email), 'ROW-099 create: the new account is not there before').toBeUndefined();
+      await peoplePage(page, monaEmail);
+      const sel = 'button, a[href], [role="button"], input[type="submit"]';
+      const createRe = /\b(create|add)\b|\bnew\b.*\b(account|person|member)\b/i;
+      const candidates = page.locator(sel).filter({ visible: true });
+      let at = -1;
+      for (let i = 0; i < (await candidates.count()) && at < 0; i += 1) {
+        const c = candidates.nth(i);
+        const name = ((await c.getAttribute('aria-label')) ?? (await c.innerText().catch(() => '')) ?? (await c.getAttribute('value')) ?? '').trim() || ((await c.getAttribute('value')) ?? '');
+        const outside = await c.evaluate((el) => !el.closest('nav, header, [role="navigation"], [role="banner"]'));
+        if (outside && createRe.test(name)) at = i;
+      }
+      expect(at, 'ROW-099 create: the page has a create control outside its navigation').toBeGreaterThanOrEqual(0);
+      const control = candidates.nth(at);
+      const form = control.locator('xpath=ancestor::form[1]');
+      let scope: Locator;
+      if ((await form.count()) > 0 && (await form.getByLabel(/e-?mail/i).filter({ visible: true }).count()) > 0) {
+        scope = form;
+      } else {
+        await control.click();
+        scope = await stepScope(page, /e-?mail/i, page.locator('main').or(page.locator('body')).first());
+      }
+      await fillField(scope, /^\s*(display\s*)?name\b|full name/i, created.name, 'create (name)');
+      await fillField(scope, /e-?mail/i, created.email, 'create (email)');
+      await fillField(scope, /password/i, created.password, 'create (password)');
+      await fillField(scope, /allowance|days/i, String(created.allowance), 'create (allowance)');
+      if (scope === form) await control.click();
+      else await submitStep(scope, /e-?mail/i);
+      const after = await pollUntil(people, (p) => recordByEmail(p, created.email) !== undefined);
+      const rec = recordByEmail(after, created.email);
+      expect.soft(rec && holdsValue(rec, created.name), `ROW-099 create: the new account is listed with its name (${show(rec)})`).toBe(true);
+      expect.soft(await canSignIn(created.email, created.password), 'ROW-099 create: the new account signs in with the password given').toBe(true);
+    });
+
+    // The neighbours stayed untouched.
+    const finalPeople = await people();
+    const ottoRec = recordByEmail(finalPeople, t.off.email);
+    expect.soft(ottoRec && holdsValue(ottoRec, t.off.name), `ROW-099: Otto's name and email are unchanged (${show(ottoRec)})`).toBe(true);
+    const adminRec = recordByEmail(finalPeople, admin.email);
+    expect.soft(adminRec && holdsValue(adminRec, admin.name), `ROW-099: the admin's name and email are unchanged (${show(adminRec)})`).toBe(true);
+    expect.soft(holdsValue(ottoRec, newAllowance), "ROW-099: Otto did not get Mona's new allowance").toBe(false);
   } finally {
     await opened.close();
   }

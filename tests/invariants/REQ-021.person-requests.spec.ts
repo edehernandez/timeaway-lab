@@ -9,7 +9,12 @@
 // page's cancel actions are counted over the whole page (the denominator), with fixtures chosen so every plausible
 // wrong rule gives a different count than the right one.
 // The team zone is Pacific/Auckland; every clock instant is 09:00 there, where the UTC date is the day before.
+// Slice 1, brief test-author-24: a ROW-102 case added after ROW-102's first — the person page itself, read in the
+// browser (lesson L-1): every request of the person drawn as its own row, with its state as a word. Every earlier
+// assertion kept.
 import { test, expect, type Page } from '@playwright/test';
+import { datePatterns, findRows, type FoundRow } from './page-reading';
+import { saysState, type ShownState } from './own-page';
 import {
   adminCancel,
   approve,
@@ -222,6 +227,123 @@ test('ROW-102.REQ-021.the-persons-requests-page-lists-every-request-of-that-pers
   expect.soft(listed, "ROW-102: the neighbour's request is not on Mila's page").not.toContain(String(f.r.nell));
   const own = topRecordIds(await observeOwnRequests(f.mila.actor));
   expect.soft([...listed].sort(), "ROW-102: the admin's page lists the same requests as Mila's own page").toEqual([...own].sort());
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-102, the drawn page (added by test-author pass, slice 1, brief test-author-24).
+// ROW-102 promise: REQ-021 fail-if (2) "a request of that person is missing"; REQ-021 the admin's page of a person
+// ROW-102   lists "all of that person's requests as the person's own page does" (A-031; REQ-006: each with its state);
+// ROW-102   lesson L-1: a row promising what a page shows is read on the page, beside the API.
+// ROW-102 wrong product: a person page whose data route answers every request but whose page draws only the ones the
+// ROW-102   admin can act on (pending and approved), or filters out cancelled, rejected, sick or next year's requests on
+// ROW-102   the client, or draws a cancelled request as approved, or merges the neighbour's request with the same days.
+// ROW-102 given: Mila's nine requests in every state, kind and year (the fixture below), sent Mon 15 Feb 2027 and
+// ROW-102   decided Tue 16 Feb, one partly cancelled Wed 10 Mar, read Sat 13 Mar — no act's date is any request's first
+// ROW-102   or last day, so each row is told apart by its own two days; Nell's pending request on Mila's pending days as
+// ROW-102   the decoy. when: the admin opens /admin/people/<Mila>. then: each of the nine requests is drawn as a row of
+// ROW-102   its own (its first and last day together, in exactly one place), and each row says its state as a word:
+// ROW-102   pending three times, rejected, cancelled twice, approved three times (the partly cancelled one approved).
+// ROW-102 controls: the control case reads Mila's page data: the nine ids are there, and the page is reached (200)
+// ROW-102   with her name drawn — so a missing row is the page's drawing, not a missing record.
+// ROW-102 technique: the whole list on the page (every one of the nine, never part), each row bounded by its
+// ROW-102   neighbours' days; the state word read on the row's own text, a pending row also read for no decided word.
+// ROW-102 cases: ROW-102 target=ROW-102.REQ-021.the-drawn-person-page-shows-every-request-of-that-person-in-its-state control=ROW-102.control.the-person-page-and-its-data-are-reached
+const D_SEND = teamInstant('2027-02-15', '09:00', TZ); // Mon
+const D_DECIDE = teamInstant('2027-02-16', '09:00', TZ); // Tue
+
+interface DrawnRequest {
+  label: string;
+  firstDay: string;
+  lastDay: string;
+  state: ShownState;
+  /** State words the row must not say (only where no act of the request could put them there). */
+  never: ShownState[];
+}
+
+async function everyStateDrawn() {
+  const admin = await start(D_SEND);
+  const mila = await member(admin, 'Mila');
+  const nell = await member(admin, 'Nell');
+  const plan: (DrawnRequest & { kind: 'vacation' | 'sick' })[] = [
+    { label: 'pending', kind: 'vacation', firstDay: '2027-03-22', lastDay: '2027-03-23', state: 'pending', never: ['approved', 'rejected', 'cancelled'] },
+    { label: 'pending sick', kind: 'sick', firstDay: '2027-03-03', lastDay: '2027-03-04', state: 'pending', never: ['approved', 'rejected', 'cancelled'] },
+    { label: 'pending next year', kind: 'vacation', firstDay: '2028-02-07', lastDay: '2028-02-08', state: 'pending', never: ['approved', 'rejected', 'cancelled'] },
+    { label: 'rejected', kind: 'vacation', firstDay: '2027-03-24', lastDay: '2027-03-25', state: 'rejected', never: ['approved', 'cancelled', 'pending'] },
+    { label: 'own cancel', kind: 'vacation', firstDay: '2027-03-29', lastDay: '2027-03-30', state: 'cancelled', never: ['approved', 'rejected'] },
+    { label: 'admin cancel', kind: 'vacation', firstDay: '2027-03-31', lastDay: '2027-04-01', state: 'cancelled', never: ['rejected', 'pending'] },
+    { label: 'past only', kind: 'vacation', firstDay: '2027-03-01', lastDay: '2027-03-02', state: 'approved', never: ['rejected', 'cancelled', 'pending'] },
+    { label: 'partly cancelled', kind: 'vacation', firstDay: '2027-03-08', lastDay: '2027-03-17', state: 'approved', never: ['rejected', 'pending'] },
+    { label: 'ahead', kind: 'vacation', firstDay: '2027-04-05', lastDay: '2027-04-06', state: 'approved', never: ['rejected', 'cancelled', 'pending'] },
+  ];
+  const ids: Record<string, AccountId> = {};
+  for (const p of plan) ids[p.label] = await sendRequest(mila.actor, { kind: p.kind, firstDay: p.firstDay, lastDay: p.lastDay });
+  await sendRequest(nell.actor, { kind: 'vacation', firstDay: '2027-03-22', lastDay: '2027-03-23' });
+  await setClock(D_DECIDE);
+  for (const l of ['past only', 'partly cancelled', 'ahead', 'admin cancel']) await approve(admin, ids[l]);
+  await reject(admin, ids['rejected']);
+  await cancelOwnRequest(mila.actor, ids['own cancel']);
+  await adminCancel(admin, ids['admin cancel']);
+  await setClock(T_PARTIAL);
+  await adminCancel(admin, ids['partly cancelled']);
+  await setClock(T_SAT);
+  return { admin, mila: mila.m, nell: nell.m, plan, ids };
+}
+
+/** Opens the admin's page of a person and reads the rows of `plan` (findRows), polling (bounded) until all are found. */
+async function drawnRows(page: Page, accountId: AccountId, plan: DrawnRequest[]): Promise<{ status: number; rows: FoundRow[] }> {
+  const res = await page.goto(PAGES.adminPerson(accountId));
+  await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+  const specs = plan.map((p) => ({ key: p.label, keys: [datePatterns(p.firstDay), datePatterns(p.lastDay)] }));
+  let rows: FoundRow[] = [];
+  await expect
+    .poll(async () => (rows = await findRows(page, specs)).filter((r) => r.found).length, { timeout: 15_000 })
+    .toBe(plan.length)
+    .catch(() => undefined);
+  return { status: res?.status() ?? 0, rows };
+}
+
+/** A row's text with its controls' names taken out, so a "Cancel" button or a "Reject" link never reads as a state. */
+function withoutControls(row: FoundRow): string {
+  let t = row.text;
+  for (const c of row.controls) if (c.name) t = t.split(c.name).join(' ');
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+test('ROW-102.control.the-person-page-and-its-data-are-reached', async ({ browser }) => {
+  const f = await everyStateDrawn();
+  const listed = topRecordIds(await observePersonRequests(f.admin, f.mila.id));
+  expect([...listed].sort(), "ROW-102 control: Mila's page data lists her nine requests").toEqual(Object.values(f.ids).map(String).sort());
+  const opened = await openPage(browser, f.admin);
+  try {
+    const res = await opened.page.goto(PAGES.adminPerson(f.mila.id));
+    expect(res?.status(), "ROW-102 control: Mila's page answers the admin").toBe(200);
+    await expect(opened.page.getByText(f.mila.name).first(), "ROW-102 control: it shows Mila's name").toBeVisible({ timeout: 10_000 });
+  } finally {
+    await opened.close();
+  }
+});
+
+test('ROW-102.REQ-021.the-drawn-person-page-shows-every-request-of-that-person-in-its-state', async ({ browser }) => {
+  const f = await everyStateDrawn();
+  const opened = await openPage(browser, f.admin);
+  try {
+    const { status, rows } = await drawnRows(opened.page, f.mila.id, f.plan);
+    expect(status, "ROW-102: Mila's page is reached (setup)").toBe(200);
+    for (const p of f.plan) {
+      const row = rows.find((r) => r.key === p.label);
+      const what = `ROW-102: Mila's ${p.label} request (${p.firstDay} … ${p.lastDay})`;
+      expect.soft(row?.found, `${what} is drawn on her page`).toBe(true);
+      if (!row?.found) continue;
+      expect.soft(row.repeated, `${what} is drawn in one place, not merged with another request on the same days (row: ${JSON.stringify(row.text)})`).toBe(false);
+      const text = withoutControls(row);
+      expect.soft(saysState(text, p.state), `${what} says ${p.state} (row: ${JSON.stringify(text)})`).toBe(true);
+      for (const n of p.never) expect.soft(saysState(text, n), `${what} does not say ${n} (row: ${JSON.stringify(text)})`).toBe(false);
+    }
+    const body = await opened.page.locator('body').innerText();
+    expect.soft(body.includes(f.nell.name), "ROW-102: the neighbour Nell is not on Mila's page").toBe(false);
+  } finally {
+    await opened.close();
+  }
 });
 
 // ---------------------------------------------------------------------------------------------------

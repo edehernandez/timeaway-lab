@@ -6,11 +6,18 @@
 // account's records on the admin's view of it (GET /api/admin/people/:id/requests) and its name on GET
 // /api/admin/pending; "an approved future day" as the account listed on the calendar (GET /api/calendar, D-029) on
 // a day from today on.
+// Slice 1, brief test-author-24: ROW-167 cases added after ROW-168's — the window reached deliberately: a send (and
+// an approval) whose headers reach the product before the switch-off and whose body arrives only after the
+// switch-off has answered (a raw node:http request holding its last byte), and a send swept at measured offsets
+// across the switch-off act, as ROW-169's case in REQ-014.sign-in-in-flight.spec.ts does. Every earlier assertion kept.
+import http from 'node:http';
 import { test, expect } from '@playwright/test';
 import {
   actWithToken,
   anonymousApi,
   createMember,
+  productUrl,
+  SetupError,
   readEffect,
   resetProduct,
   sendRequest,
@@ -153,4 +160,209 @@ test('ROW-168.REQ-016.a-request-sent-before-the-switch-off-is-cancelled-by-it', 
   const rec = recordById(await getJson(admin.api, `/api/admin/people/${encodeURIComponent(String(member.id))}/requests`, 'ROW-168'), id);
   expect.soft(rec && stateOf(rec), 'ROW-168: the request is cancelled by the switch-off').toBe('cancelled');
   await expectNothingLive(admin, member, 'ROW-168');
+});
+
+// ---------------------------------------------------------------------------------------------------
+// ROW-167, the window reached deliberately (added by test-author pass, slice 1, brief test-author-24).
+// ROW-167 promise: as above — REQ-016 fail-if (2) "a switched-off account keeps a pending request", (3) "a
+// ROW-167   switched-off account keeps an approved day from today on, or that day stays on the calendar"; A-022;
+// ROW-167   D-047 ("every write a session authorises re-checks, inside its own write transaction, that the acting
+// ROW-167   session still exists and its account is still switched on … a session ended meanwhile is refused 401").
+// ROW-167 wrong product: a send route that checks the session, then awaits its body, then inserts the request without
+// ROW-167   re-checking — when the switch-off completes during that await, the request is stored pending on an account
+// ROW-167   already switched off; an approve route that reads the request as pending before awaiting its body and writes
+// ROW-167   it approved after — the switch-off's cancel is overwritten and the days come back on the calendar. Fired in
+// ROW-167   the same tick, such a send finishes long before the switch-off starts, so the earlier case cannot see it.
+// ROW-167 given: today Mon 2027-03-01 (Auckland); a fresh member per round (allowance 100), its 4-day vacation in
+// ROW-167   the week of Mon 2027-03-08. when (held): in each of 3 send rounds the member's POST /api/requests leaves with
+// ROW-167   its headers and every byte of its body but the last, flushed to the socket; the admin's switch-off act (its
+// ROW-167   token read first) runs to its answer; then the last byte goes. In each of 3 approve rounds the same with the
+// ROW-167   admin's approve act on the member's pending request. when (swept): the send's and the switch-off act's
+// ROW-167   uncontested times are measured (medians of three, I and S); in each of 12 rounds the send leaves at offset o
+// ROW-167   from the switch-off act, o stepping evenly from S − 2·I to S + I, walking from "the send finished before the
+// ROW-167   switch-off" through the switch-off to "the send started after it". A switch-off refused as stale (its effect
+// ROW-167   changed) is done again, so every round ends with the account off. then: after every round the account gives
+// ROW-167   no session, holds no pending request, the pending page lists nothing of it and the calendar shows it on no day
+// ROW-167   from today on; in the approve rounds the request ends cancelled.
+// ROW-167 controls: the control case sends a held request and a held approval with no switch-off: each is answered
+// ROW-167   2xx when its last byte goes, the request is pending and then approved — so a refusal in the target is the
+// ROW-167   switch-off's doing, never a malformed held request; the sweep brackets the switch-off (some send answered
+// ROW-167   2xx, some was refused), else the calibration missed and the case fails as SETUP.
+// ROW-167 technique: the race forced into the route's await by holding the body (deterministic for a check made
+// ROW-167   before the body is read), then swept offsets for a check made after it; the end state asserted
+// ROW-167   unconditionally in every round.
+// ROW-167 cases: ROW-167 target=ROW-167.REQ-016.a-send-or-approval-held-across-the-switch-off-or-swept-over-it-leaves-nothing-live control=ROW-167.control.a-held-send-and-a-held-approval-go-through-with-no-switch-off
+
+interface Held {
+  /** Sends the held last byte and answers the product's status and body (the answer may already have come). */
+  release(): Promise<{ status: number; text: string }>;
+}
+
+/**
+ * POSTs `data` as JSON to `path` on the actor's session with a raw node:http request whose headers and every byte of
+ * the body but the last are written and flushed to the socket before this returns; release() sends the last byte.
+ */
+async function holdPost(actor: Actor, path: string, data: unknown): Promise<Held> {
+  const url = new URL(path, productUrl());
+  const payload = Buffer.from(JSON.stringify(data), 'utf8');
+  const cookie = (await actor.api.storageState()).cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  const req = http.request({
+    hostname: url.hostname,
+    port: url.port || 80,
+    path: url.pathname + url.search,
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'content-length': String(payload.length), accept: 'application/json', cookie },
+  });
+  const answer = new Promise<{ status: number; text: string }>((resolve, reject) => {
+    req.on('response', (res) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (c: string) => (text += c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+  });
+  answer.catch(() => undefined);
+  await new Promise<void>((resolve, reject) => req.write(payload.subarray(0, payload.length - 1), (e) => (e ? reject(new SetupError(`holding POST ${path}: ${e.message}`)) : resolve())));
+  return {
+    release: async () => {
+      if (!req.writableEnded) req.end(payload.subarray(payload.length - 1));
+      return answer;
+    },
+  };
+}
+
+async function freshMemberSession(admin: Actor): Promise<{ m: Member; session: Actor }> {
+  const m = await createMember(admin, { allowance: 100 });
+  return { m, session: keep(await signInMember(m)) };
+}
+
+function personRequestsRoute(m: Member): string {
+  return `/api/admin/people/${encodeURIComponent(String(m.id))}/requests`;
+}
+
+test('ROW-167.control.a-held-send-and-a-held-approval-go-through-with-no-switch-off', async () => {
+  const { admin } = await start();
+  const { m, session } = await freshMemberSession(admin);
+  const held = await holdPost(session, '/api/requests', { kind: 'vacation', ...week(0) });
+  const sent = await held.release();
+  expect(ok(sent.status), `ROW-167 control: the held send is answered 2xx once its last byte goes (answered ${sent.status} ${sent.text.slice(0, 200)})`).toBe(true);
+  const id = (JSON.parse(sent.text) as { id: AccountId }).id;
+  const rec = recordById(await getJson(admin.api, personRequestsRoute(m), 'ROW-167 control'), id);
+  expect(rec && stateOf(rec), 'ROW-167 control: the held send is stored pending').toBe('pending');
+  const appr = await readEffect(admin, 'approve', id);
+  const heldApprove = await holdPost(admin, `/api/admin/requests/${encodeURIComponent(String(id))}/approve`, { token: appr.token });
+  const approved = await heldApprove.release();
+  expect(ok(approved.status), `ROW-167 control: the held approval is answered 2xx (answered ${approved.status} ${approved.text.slice(0, 200)})`).toBe(true);
+  const after = recordById(await getJson(admin.api, personRequestsRoute(m), 'ROW-167 control'), id);
+  expect(after && stateOf(after), 'ROW-167 control: the held approval approved the request').toBe('approved');
+});
+
+const SWEEP_ROUNDS = 12;
+
+async function pause(ms: number): Promise<void> {
+  if (ms > 0) await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+async function timed<T>(f: () => Promise<T>): Promise<{ ms: number; value: T }> {
+  const t = performance.now();
+  const value = await f();
+  return { ms: performance.now() - t, value };
+}
+
+/** Starts the switch-off act and the send so that the send leaves `offsetMs` after the act (before it when negative). */
+async function staggered(change: () => Promise<number>, sendNow: () => Promise<number>, offsetMs: number): Promise<{ sent: number; changed: number }> {
+  if (offsetMs >= 0) {
+    const c = change();
+    await pause(offsetMs);
+    const s = sendNow();
+    const [sent, changed] = await Promise.all([s, c]);
+    return { sent, changed };
+  }
+  const s = sendNow();
+  await pause(-offsetMs);
+  const c = change();
+  const [sent, changed] = await Promise.all([s, c]);
+  return { sent, changed };
+}
+
+test('ROW-167.REQ-016.a-send-or-approval-held-across-the-switch-off-or-swept-over-it-leaves-nothing-live', async () => {
+  const { admin } = await start();
+
+  // Held sends: the switch-off completes while the send's body is still in flight.
+  for (let i = 0; i < 3; i += 1) {
+    const { m, session } = await freshMemberSession(admin);
+    const off = await readEffect(admin, 'switch-off', m.id);
+    const held = await holdPost(session, '/api/requests', { kind: 'vacation', ...week(0) });
+    const switched = (await actWithToken(admin, 'switch-off', m.id, off.token)).status();
+    const sent = await held.release();
+    if (!ok(switched)) await switchAccount(admin, m.id, false);
+    test.info().annotations.push({ type: 'ROW-167 held send', description: `round ${i}: switch ${switched}, send ${sent.status}` });
+    await expectNothingLive(admin, m, `ROW-167 held send round ${i} (switch ${switched}, send ${sent.status})`);
+  }
+
+  // Held approvals: the switch-off completes while the approval's body is still in flight.
+  for (let i = 0; i < 3; i += 1) {
+    const { m, session } = await freshMemberSession(admin);
+    const id: AccountId = await sendRequest(session, { kind: 'vacation', ...week(0) });
+    const appr = await readEffect(admin, 'approve', id);
+    const off = await readEffect(admin, 'switch-off', m.id);
+    const held = await holdPost(admin, `/api/admin/requests/${encodeURIComponent(String(id))}/approve`, { token: appr.token });
+    const switched = (await actWithToken(admin, 'switch-off', m.id, off.token)).status();
+    const approved = await held.release();
+    if (!ok(switched)) await switchAccount(admin, m.id, false);
+    const where = `ROW-167 held approve round ${i} (switch ${switched}, approve ${approved.status})`;
+    test.info().annotations.push({ type: 'ROW-167 held approve', description: `round ${i}: switch ${switched}, approve ${approved.status}` });
+    await expectNothingLive(admin, m, where);
+    const rec = recordById(await getJson(admin.api, personRequestsRoute(m), where), id);
+    expect.soft(rec && stateOf(rec), `${where}: the request ends cancelled`).toBe('cancelled');
+  }
+
+  // Calibration: I (an uncontested send), S (an uncontested switch-off act).
+  const probe = await freshMemberSession(admin);
+  const sendMs: number[] = [];
+  for (let k = 0; k < 3; k += 1) {
+    const t = await timed(async () => (await probe.session.api.post('/api/requests', { data: { kind: 'vacation', ...week(k + 1) } })).status());
+    if (!ok(t.value)) throw new SetupError(`ROW-167 calibration: an uncontested send answered ${t.value}`);
+    sendMs.push(t.ms);
+  }
+  const offMs: number[] = [];
+  for (let k = 0; k < 3; k += 1) {
+    const effect = await readEffect(admin, 'switch-off', probe.m.id);
+    const t = await timed(async () => (await actWithToken(admin, 'switch-off', probe.m.id, effect.token)).status());
+    if (!ok(t.value)) throw new SetupError(`ROW-167 calibration: the switch-off act answered ${t.value}`);
+    offMs.push(t.ms);
+    await switchAccount(admin, probe.m.id, true);
+  }
+  const I = median(sendMs);
+  const S = median(offMs);
+  test.info().annotations.push({ type: 'ROW-167 calibration', description: `send ${Math.round(I)} ms, switch-off act ${Math.round(S)} ms` });
+
+  // Swept sends.
+  const from = S - 2 * I;
+  const step = (3 * I) / (SWEEP_ROUNDS - 1);
+  const statuses: number[] = [];
+  for (let k = 0; k < SWEEP_ROUNDS; k += 1) {
+    const o = Math.round(from + k * step);
+    const { m, session } = await freshMemberSession(admin);
+    const off = await readEffect(admin, 'switch-off', m.id);
+    const r = await staggered(
+      async () => (await actWithToken(admin, 'switch-off', m.id, off.token)).status(),
+      async () => (await session.api.post('/api/requests', { data: { kind: 'vacation', ...week(0) } })).status(),
+      o,
+    );
+    statuses.push(r.sent);
+    if (!ok(r.changed)) await switchAccount(admin, m.id, false);
+    await expectNothingLive(admin, m, `ROW-167 swept send at offset ${o} ms (send ${r.sent}, switch ${r.changed})`);
+  }
+  test.info().annotations.push({ type: 'ROW-167 sweep', description: `send statuses ${JSON.stringify(statuses)}` });
+  if (statuses.filter(ok).length === 0 || statuses.filter((s) => s >= 400).length === 0) {
+    throw new SetupError(`ROW-167 sweep: the offsets did not bracket the switch-off (send statuses ${JSON.stringify(statuses)}); the calibration missed`);
+  }
 });
