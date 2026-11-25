@@ -94,7 +94,8 @@ async function cancel(id: number) {
 <template>
   <section>
     <h1>My requests</h1>
-    <p>Welcome, {{ me?.name }}. <NuxtLink to="/requests/new">Ask for time off</NuxtLink></p>
+    <!-- ROW-210: the link is one box, never split over two lines, so it is tapped where it is drawn. -->
+    <p>Welcome, {{ me?.name }}. <NuxtLink to="/requests/new" class="ask">Ask for time off</NuxtLink></p>
     <h2>Vacation days</h2>
     <table v-if="balance?.years?.length" class="balance">
       <thead>
@@ -116,7 +117,8 @@ async function cancel(id: number) {
     <p v-if="notice" role="status">{{ notice }}</p>
     <p v-if="problem" class="problem" role="alert">{{ problem }}</p>
     <p v-if="!data?.requests?.length">You have no requests yet.</p>
-    <table v-else>
+    <!-- REQ-012, ROW-210: at phone width the rows stack, each cell led by its column's name (main.css "stack"). -->
+    <table v-else class="stack">
       <thead>
         <tr>
           <th scope="col">Kind</th>
@@ -132,20 +134,20 @@ async function cancel(id: number) {
       </thead>
       <tbody>
         <tr v-for="r in data.requests" :key="r.id">
-          <td>{{ label(r.kind) }}</td>
-          <td>{{ shown(r.firstDay) }}</td>
-          <td>{{ shown(r.lastDay) }}</td>
-          <td>
+          <td data-label="Kind">{{ label(r.kind) }}</td>
+          <td data-label="First day">{{ shown(r.firstDay) }}</td>
+          <td data-label="Last day">{{ shown(r.lastDay) }}</td>
+          <td data-label="Weekdays">
             {{ r.countedDays }}<template v-if="r.cancelFrom"> ({{ r.inEffectDays }} in effect, {{ r.cancelledDays }} cancelled)</template>
           </td>
-          <td>{{ label(r.state) }}</td>
+          <td data-label="State">{{ label(r.state) }}</td>
           <!-- REQ-017, ROW-139: when it was sent, as its team-zone date and time. -->
-          <td>{{ shownAt(r.sentAt) }}</td>
-          <td>
+          <td data-label="Sent">{{ shownAt(r.sentAt) }}</td>
+          <td data-label="Decided">
             <template v-if="r.decidedAt">by {{ r.decidedBy ?? 'unknown' }}, {{ shownAt(r.decidedAt) }}</template>
             <template v-if="r.rejectionNote"><br>Note: {{ r.rejectionNote }}</template>
           </td>
-          <td>
+          <td data-label="Cancelled">
             <!-- REQ-019 arm 4, REQ-006 arm 7: a partial cancel shows the day its cancelled days start from. -->
             <template v-if="r.cancelledAt">
               <template v-if="r.cancelFrom">Days from {{ shown(r.cancelFrom) }} cancelled, </template>by {{ r.cancelledBy ?? 'unknown' }}, {{ shownAt(r.cancelledAt) }}
@@ -165,6 +167,7 @@ table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); }
 .problem { color: var(--danger); }
 .balance { width: auto; margin-bottom: 1rem; }
+.ask { display: inline-block; }
 .negative { color: var(--danger); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>

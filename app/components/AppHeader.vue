@@ -18,14 +18,15 @@ async function signOut() {
 <template>
   <header v-if="me" class="app-header">
     <span class="brand">TimeAway</span>
+    <!-- D-046, ROW-117: plain links, so a page's address and its drawn content change together (a full load). -->
     <nav v-if="!me.mustChangePassword" aria-label="Pages">
-      <NuxtLink to="/">My requests</NuxtLink>
-      <NuxtLink to="/requests/new">Ask for time off</NuxtLink>
-      <NuxtLink to="/calendar">Calendar</NuxtLink>
-      <NuxtLink to="/password">Password</NuxtLink>
+      <a href="/">My requests</a>
+      <a href="/requests/new">Ask for time off</a>
+      <a href="/calendar">Calendar</a>
+      <a href="/password">Password</a>
       <template v-if="me.isAdmin">
-        <NuxtLink to="/admin/pending">Pending requests</NuxtLink>
-        <NuxtLink to="/admin/people">People</NuxtLink>
+        <a href="/admin/pending">Pending requests</a>
+        <a href="/admin/people">People</a>
       </template>
     </nav>
     <span class="who">Signed in as <strong>{{ me.name }}</strong></span>

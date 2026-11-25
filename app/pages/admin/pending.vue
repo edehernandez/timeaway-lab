@@ -114,7 +114,8 @@ async function confirm(note: string) {
     <p v-if="problem" class="problem" role="alert">{{ problem }}</p>
     <p v-if="done" role="status">{{ done }}</p>
     <p v-if="!data.requests.length">No requests are waiting for a decision.</p>
-    <table v-else>
+    <!-- REQ-012, ROW-210: at phone width the rows stack, each cell led by its column's name (main.css "stack"). -->
+    <table v-else class="stack">
       <thead>
         <tr>
           <th scope="col">Person</th>
@@ -128,16 +129,17 @@ async function confirm(note: string) {
       </thead>
       <tbody>
         <tr v-for="e in data.requests" :key="e.id">
-          <td>{{ e.name }}</td>
-          <td>{{ shownWord(e.kind) }}</td>
-          <td>{{ shownRange(e.firstDay, e.lastDay) }}</td>
-          <td>{{ shownCount(e.countedDays) }}</td>
-          <td>
+          <td data-label="Person">{{ e.name }}</td>
+          <td data-label="Kind">{{ shownWord(e.kind) }}</td>
+          <td data-label="Days">{{ shownRange(e.firstDay, e.lastDay) }}</td>
+          <td data-label="Weekdays">{{ shownCount(e.countedDays) }}</td>
+          <td data-label="Days left in its year">
             <template v-if="e.daysLeft !== null">{{ shownFigure(e.daysLeft) }} days left in {{ e.year }}</template>
             <template v-else>–</template>
           </td>
-          <td :class="{ negative: e.forecast !== null && e.forecast < 0 }">
-            <template v-if="e.forecast !== null">would leave {{ shownFigure(e.forecast) }}</template>
+          <!-- REQ-022, ROW-159: the forecast is labelled as such and names its year. -->
+          <td data-label="Days left if approved" :class="{ negative: e.forecast !== null && e.forecast < 0 }">
+            <template v-if="e.forecast !== null">would leave {{ shownFigure(e.forecast) }} in {{ e.year }}</template>
             <template v-else>–</template>
           </td>
           <td class="decide">

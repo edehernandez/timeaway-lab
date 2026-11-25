@@ -10,5 +10,16 @@
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--ink);
 }
-body { margin: 0; }
+/* Long unbroken names, emails and notes wrap inside the screen instead of widening the page (REQ-013, ROW-214). */
+body { margin: 0; overflow-wrap: anywhere; }
 main { max-width: 60rem; margin: 0 auto; padding: 1rem; }
+
+/* Phone width (REQ-012, ROW-210, D-046): a listing table (class "stack") draws each row as a block of its cells, each
+   led by its column's name (data-label), so no row is wider than the screen and every control stays on it. */
+@media (max-width: 40rem) {
+  table.stack, table.stack tbody, table.stack tr, table.stack td, table.stack tbody th { display: block; }
+  table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  table.stack tr { padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+  table.stack td, table.stack tbody th { padding: 0.15rem 0; border-bottom: none; }
+  table.stack td[data-label]::before { content: attr(data-label) ": "; font-weight: 600; }
+}
